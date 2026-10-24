@@ -1,0 +1,165 @@
+IMPORTING THE HAYABUSA DASHBOARDS INTO ANOTHER KIBANA
+====================================================
+
+There are TWO files with the same 171 objects. Pick by the target Kibana's
+version (Kibana: Help menu "?" top right -> About):
+
+    Kibana 9.0.8 or newer  ->  hayabusa-kibana-objects.ndjson
+    Kibana 8.7.x to 9.0.7  ->  hayabusa-kibana-objects-8.7.ndjson
+                               (e.g. a stack on 8.7.0)
+
+The 8.7 file was tested by importing it into a clean Elasticsearch + Kibana
+8.7.0: all 171 objects import, all 9 dashboards and 9 saved searches render.
+It is generated, not hand-edited - rebuild it with
+    python scripts\convert_dashboards_87.py
+after re-exporting the main file.
+
+Each file holds everything:
+
+    9 dashboards      Hayabusa - EVTX Detection Overview
+                      Hayabusa - Threat Hunting
+                      Hayabusa - Behavioural Analytics
+                      Hayabusa - PEAK Hunt   (rarest-first hunting tables;
+                        built by scripts\make_peak_dashboard.py)
+                      Hayabusa - MITRE ATT&CK   (tactics and techniques,
+                        moved off the other dashboards in v37;
+                        built by scripts\make_mitre_dashboard.py)
+                      Hayabusa - Results Summary   (Hayabusa's own end-of-scan
+                        summary and logon-summary, rebuilt in Kibana;
+                        built by scripts\make_summary_dashboard.py)
+                      Raw Events - PEAK Hunt (Security Onion)   (EVERY raw
+                        Windows event so-import-evtx put in Security Onion,
+                        rarest first - PowerShell, command lines, LOLBins,
+                        logons, services, tasks, accounts, cleared logs,
+                        Defender, LSASS; built by
+                        scripts\make_raw_hunt_dashboard.py)
+                      Hayabusa - Anomaly Hunt   and
+                      Raw Events - Anomaly Hunt (Security Onion)   (seven
+                        hunts beyond rarest-first: only on one machine, new
+                        lately, odd hours, wrong place, bursts, fan-out,
+                        longest command lines; built by
+                        scripts\make_anomaly_dashboards.py, runtime fields
+                        from scripts\anomaly_runtime_fields.py)
+    9 saved searches  Hayabusa: Commands Executed, PowerShell Activity,
+                      LOLBins and Scripting, Encoded / Obfuscated Commands,
+                      Critical and High Only, Logon Activity,
+                      Detections with an IP, PowerShell Script Blocks;
+                      Raw events: PowerShell script blocks (4104)
+    151 Lens panels   the charts inside the dashboards
+    2 data views      "Hayabusa EVTX detections" -> index pattern hayabusa-*
+                      (carries the friendly field names, e.g. "Computer");
+                      "Raw Windows events (Security Onion)" ->
+                      logs-import-so*,logs-windows.*,logs-system.*, time
+                      field event.created (when the event happened - Security
+                      Onion 2.4 files imports under the IMPORT time)
+
+Exported from Kibana 9.0.8.
+
+The Raw Events dashboard reads Security Onion's raw Windows events
+(logs-import-so*, logs-windows.*, logs-system.*), not hayabusa-*. Whoever
+opens it needs read access to those indices - a Security Onion analyst has
+it. On a plain Elastic stack without those indices it simply stays
+empty; the Hayabusa dashboards are unaffected.
+
+
+BEFORE YOU START
+----------------
+
+- Use the file that matches the target Kibana's version (see above). Kibana
+  refuses objects exported from a newer version than itself, so the main
+  file fails on anything older than 9.0.8 with an error about
+  "coreMigrationVersion ... belongs to a more recent version of Kibana".
+
+- You need a login allowed to manage saved objects (on Security Onion, an
+  administrator account).
+
+- Order does not matter, but the dashboards stay empty until data exists in an
+  index whose name starts with "hayabusa-". Upload it with tab 3 of the
+  EVTXER - its name check already enforces that prefix.
+
+
+IMPORT (web browser, works on Security Onion and plain Kibana)
+--------------------------------------------------------------
+
+1. Open Kibana. On Security Onion that is  https://<SO-address>/kibana/
+   On plain Elastic, browse to the Kibana IP and choose "Log in with Elasticsearch"
+   (SAML / SSO also works if that account may manage saved objects).
+
+2. Menu (three lines, top left) -> Stack Management -> Saved objects.
+   Direct link:  https://<SO-address>/kibana/app/management/kibana/objects
+
+3. Click "Import" (top right).
+
+4. Select the file for your Kibana version from this folder.
+
+5. Import options:
+     (x) Check for existing objects
+         (x) Automatically overwrite conflicts
+     Do NOT choose "Create new objects with random IDs" - importing twice
+     would then give you two copies of everything.
+
+6. Click "Import". The summary should say 171 objects imported, with no errors.
+
+7. Menu -> Dashboards -> search "Hayabusa" -> open one.
+
+8. SET THE TIME PICKER (top right) to a range that covers the events, e.g.
+   "Last 5 years" or an absolute range. EVTX events carry the time they
+   happened on the host, not the upload time, so "Last 15 minutes" shows
+   nothing.
+
+Saved searches: Menu -> Discover -> "Open" -> pick a "Hayabusa:" search.
+
+
+IMPORT FROM THE COMMAND LINE (plain Kibana only, NOT Security Onion)
+--------------------------------------------------------------------
+
+Security Onion puts a login page in front of Kibana, so this fails there -
+use the browser steps above. On a standalone Kibana (port 5601), from this
+folder in a Command Prompt:
+
+    curl.exe --cacert ca.crt -u <admin-user> -X POST ^
+      "https://<kibana-host>:5601/api/saved_objects/_import?overwrite=true" ^
+      -H "kbn-xsrf: true" ^
+      --form file=@hayabusa-kibana-objects.ndjson
+
+ca.crt is the stack's CA certificate. -k instead skips the certificate
+check - only on a throwaway lab stack, never with a real admin password.
+
+curl prompts for the password. Look for "success":true in the reply.
+
+
+TROUBLESHOOTING
+---------------
+
+"Unsupported saved object version" / import error about migrations
+    The target Kibana is older than 9.0.8. Import
+    hayabusa-kibana-objects-8.7.ndjson instead (works on 8.7 and later).
+
+Dashboard opens but every panel says "No results found"
+    1. Widen the time picker (step 8).
+    2. Check the index name starts with "hayabusa-":
+       Stack Management -> Index Management.
+
+Panels show "Could not locate that data view"
+    The data view was not imported. Import the file again with overwrite on.
+
+Field names show raw (hayabusa.level instead of Severity)
+    Another data view is selected. Use "Hayabusa EVTX detections".
+
+
+REMOVING IT AGAIN
+-----------------
+
+Stack Management -> Saved objects -> search "hayabusa" -> tick all ->
+Delete. Every object in this file has an ID starting with "hayabusa-", so
+none of Security Onion's own dashboards are touched. Your uploaded data is
+separate: delete the hayabusa-* index under Index Management.
+
+
+RE-EXPORTING (on the development machine, after changing a dashboard)
+---------------------------------------------------------------------
+
+    python scripts\export_dashboards.py --env-file .env ^
+      -o kibana\hayabusa-kibana-objects.ndjson
+
+then copy the kibana folder to EVTXER again.

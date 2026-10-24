@@ -1,0 +1,79 @@
+EVTXER - third-party software
+=============================
+
+EVTXER starts the programs below as separate programs and reads the files
+they write. They are not part of EVTXER and keep their own licences. Each is
+shipped unmodified, exactly as its authors released it. The licence texts
+are in this folder.
+
+
+HAYABUSA 4.2.0                                       code\hayabusa-x64\
+--------------
+Copyright Yamato Security (https://github.com/Yamato-Security).
+Licence: GNU Affero General Public License v3 - AGPL-3.0.txt
+Program: hayabusa-4.2.0-win-x64.exe from the project's v4.2.0 release.
+Source:  hayabusa-4.2.0-source.zip in this folder - the project's source at
+         tag v4.2.0 (Cargo.lock lists the Rust libraries it is built with).
+         Also https://github.com/Yamato-Security/hayabusa/tree/v4.2.0
+
+
+HAYABUSA DETECTION RULES                             code\hayabusa-x64\rules\
+------------------------
+Licence: Detection Rule License (DRL) 1.1 - DRL-1.1.txt
+         (also rules\LICENSE.md, beside the rules).
+Authors: named in each rule's "author" field. EVTXER keeps that field: in
+         the rules as shipped, and in every detection it uploads
+         (rule.author), as the DRL requires.
+Source:  https://github.com/Yamato-Security/hayabusa-rules
+         (many rules come from Sigma: https://github.com/SigmaHQ/sigma)
+
+
+TAKAJO 2.16.1                                        code\takajo\
+-------------
+Copyright Yamato Security (https://github.com/Yamato-Security).
+Licence: GNU Affero General Public License v3 - AGPL-3.0.txt
+Program: takajo-2.16.1-win-x64.exe from the project's v2.16.1 release.
+Source:  takajo-2.16.1-source.zip in this folder - the project's source at
+         tag v2.16.1 (takajo.nimble lists the Nim libraries it is built with).
+         Also https://github.com/Yamato-Security/takajo/tree/v2.16.1
+
+Takajo's release bundles these, unmodified:
+
+  duckdb.dll       DuckDB 1.4.4
+                   Copyright 2018-2025 Stichting DuckDB Foundation
+                   MIT - MIT.txt
+  pcre64.dll       PCRE 8.37
+                   Copyright (c) 1997-2015 University of Cambridge, and the
+                   other holders named in PCRE-BSD.txt
+                   BSD - PCRE-BSD.txt (the text is from PCRE 8.45; the
+                   terms are the same throughout PCRE 8)
+  sqlite3_64.dll   SQLite 3.46.1 - public domain
+                   (https://www.sqlite.org/copyright.html)
+
+  In templates\ (the HTML report):
+  Alpine.js 3.14.1 Copyright (c) 2019-2021 Caleb Porzio and contributors
+                   MIT - MIT.txt
+  Tailwind CSS 3.4 Copyright (c) Tailwind Labs, Inc.
+                   MIT - MIT.txt
+  Prism            Copyright (c) 2012 Lea Verou
+                   MIT - MIT.txt
+  flatpickr 4.6.13 Copyright (c) 2017 Gregory Petrosyan
+                   MIT - MIT.txt
+  Font Awesome Free 6.0 and 6.2
+                   Copyright Fonticons, Inc. Icons CC BY 4.0, fonts SIL OFL
+                   1.1, code MIT - the notice is kept at the top of
+                   font-awesome.6.0.css and static\css\all.css.
+                   https://fontawesome.com/license/free
+
+
+PUTTY 0.85 (plink, pscp)                             code\putty\
+------------------------
+Copyright 1997-2026 Simon Tatham and the others named in code\putty\LICENCE.
+Licence: MIT-style - code\putty\LICENCE
+Source:  https://www.chiark.greenend.org.uk/~sgtatham/putty/
+
+
+Passing EVTXER on
+-----------------
+Keep this folder with it. The AGPL lets you pass Hayabusa and Takajo on as
+long as their licence and source go with them - this folder does both.

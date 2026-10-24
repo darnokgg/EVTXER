@@ -1,0 +1,416 @@
+{
+  "index_patterns": [
+    "hayabusa-*"
+  ],
+  "priority": 500,
+  "_meta": {
+    "description": "Hayabusa EVTX detections, ECS-hybrid. Pattern MUST match the tool's index guard, Test-HayabusaIndexName (hayabusa-*), or an index created with a different name gets dynamic mapping and silently drops documents on type conflicts.",
+    "managed_by": "hayabusa-project"
+  },
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "refresh_interval": "5s",
+      "mapping.total_fields.limit": 10000
+    },
+    "mappings": {
+      "dynamic": "false",
+      "dynamic_templates": [
+        {
+          "event_data_string": {
+            "path_match": "winlog.event_data.*",
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        {
+          "event_data_long": {
+            "path_match": "winlog.event_data.*",
+            "match_mapping_type": "long",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        {
+          "event_data_double": {
+            "path_match": "winlog.event_data.*",
+            "match_mapping_type": "double",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        {
+          "event_data_boolean": {
+            "path_match": "winlog.event_data.*",
+            "match_mapping_type": "boolean",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        {
+          "event_data_date": {
+            "path_match": "winlog.event_data.*",
+            "match_mapping_type": "date",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        }
+      ],
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "message": {
+          "type": "text"
+        },
+        "tags": {
+          "type": "keyword"
+        },
+        "ecs": {
+          "properties": {
+            "version": {
+              "type": "keyword"
+            }
+          }
+        },
+        "event": {
+          "properties": {
+            "id": {
+              "type": "keyword"
+            },
+            "kind": {
+              "type": "keyword"
+            },
+            "module": {
+              "type": "keyword"
+            },
+            "dataset": {
+              "type": "keyword"
+            },
+            "code": {
+              "type": "keyword"
+            },
+            "provider": {
+              "type": "keyword"
+            },
+            "severity": {
+              "type": "long"
+            },
+            "risk_score": {
+              "type": "float"
+            },
+            "ingested": {
+              "type": "date"
+            }
+          }
+        },
+        "import": {
+          "properties": {
+            "id": {
+              "type": "keyword"
+            },
+            "file": {
+              "type": "keyword"
+            }
+          }
+        },
+        "rule": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "fields": {
+                "text": {
+                  "type": "text"
+                }
+              }
+            },
+            "id": {
+              "type": "keyword"
+            },
+            "ruleset": {
+              "type": "keyword"
+            },
+            "author": {
+              "type": "keyword"
+            }
+          }
+        },
+        "host": {
+          "properties": {
+            "name": {
+              "type": "keyword"
+            },
+            "hostname": {
+              "type": "keyword"
+            }
+          }
+        },
+        "winlog": {
+          "properties": {
+            "channel": {
+              "type": "keyword"
+            },
+            "provider_name": {
+              "type": "keyword"
+            },
+            "event_id": {
+              "type": "keyword"
+            },
+            "record_id": {
+              "type": "long"
+            },
+            "logon": {
+              "properties": {
+                "type": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "event_data": {
+              "type": "object",
+              "dynamic": true
+            }
+          }
+        },
+        "log": {
+          "properties": {
+            "file": {
+              "properties": {
+                "path": {
+                  "type": "keyword"
+                }
+              }
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "name": {
+              "type": "keyword"
+            },
+            "domain": {
+              "type": "keyword"
+            },
+            "id": {
+              "type": "keyword"
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "long"
+            }
+          }
+        },
+        "destination": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "long"
+            }
+          }
+        },
+        "process": {
+          "properties": {
+            "executable": {
+              "type": "keyword"
+            },
+            "name": {
+              "type": "keyword"
+            },
+            "command_line": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "text"
+                }
+              }
+            },
+            "pid": {
+              "type": "long"
+            },
+            "parent": {
+              "properties": {
+                "executable": {
+                  "type": "keyword"
+                },
+                "name": {
+                  "type": "keyword"
+                },
+                "pid": {
+                  "type": "long"
+                },
+                "command_line": {
+                  "type": "keyword",
+                  "ignore_above": 8191,
+                  "fields": {
+                    "text": {
+                      "type": "text"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "file": {
+          "properties": {
+            "hash": {
+              "properties": {
+                "md5": {
+                  "type": "keyword"
+                },
+                "sha1": {
+                  "type": "keyword"
+                },
+                "sha256": {
+                  "type": "keyword"
+                },
+                "imphash": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "path": {
+              "type": "keyword",
+              "ignore_above": 4096
+            },
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "threat": {
+          "properties": {
+            "framework": {
+              "type": "keyword"
+            },
+            "tactic": {
+              "properties": {
+                "name": {
+                  "type": "keyword"
+                },
+                "id": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "technique": {
+              "properties": {
+                "id": {
+                  "type": "keyword"
+                }
+              }
+            }
+          }
+        },
+        "related": {
+          "properties": {
+            "user": {
+              "type": "keyword"
+            },
+            "ip": {
+              "type": "ip"
+            },
+            "hosts": {
+              "type": "keyword"
+            }
+          }
+        },
+        "hayabusa": {
+          "properties": {
+            "level": {
+              "type": "keyword"
+            },
+            "rule_status": {
+              "type": "keyword"
+            },
+            "rule_creation_date": {
+              "type": "keyword"
+            },
+            "rule_modified_date": {
+              "type": "keyword"
+            },
+            "rule_file": {
+              "type": "keyword"
+            },
+            "evtx_file": {
+              "type": "keyword"
+            },
+            "mitre_tags": {
+              "type": "keyword"
+            },
+            "details": {
+              "type": "flattened",
+              "depth_limit": 5
+            },
+            "extra": {
+              "type": "flattened",
+              "depth_limit": 5
+            },
+            "mitre_tactics": {
+              "type": "keyword"
+            }
+          }
+        },
+        "service": {
+          "properties": {
+            "name": {
+              "type": "keyword"
+            }
+          }
+        },
+        "registry": {
+          "properties": {
+            "path": {
+              "type": "keyword",
+              "ignore_above": 4096
+            }
+          }
+        },
+        "dns": {
+          "properties": {
+            "question": {
+              "properties": {
+                "name": {
+                  "type": "keyword"
+                }
+              }
+            }
+          }
+        },
+        "powershell": {
+          "properties": {
+            "file": {
+              "properties": {
+                "script_block_text": {
+                  "type": "text"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

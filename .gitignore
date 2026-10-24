@@ -1,0 +1,48 @@
+evtx-samples/
+testdata/
+output/
+*.evtx
+*.jsonl
+*.csv
+*.zip
+# ...except the AGPL tools' source, which ships with them (code/licenses/NOTICE.txt).
+!code/licenses/*.zip
+hayabusa-*/
+.secrets
+evtx/
+__pycache__/
+.superpowers/
+# Per-machine tool settings: Security Onion host/user and the pinned
+# certificate fingerprint. No secrets, but not the repo's business either.
+importer.conf
+# The log pane width the GUI remembers between runs.
+layout.conf
+# Takajo: the 44MB win-x64 binary bundle and the 23MB source archive.
+# Same treatment as hayabusa-x64/ - fetched, not committed.
+takajo/
+takajo-main/
+# Security Onion credentials for the live suites and the upload path.
+# Plaintext password - never commit, never copy into EVTXER.
+.env
+*.env
+# Session logs written by HayabusaMissionTool.ps1 (target hostnames, errors).
+logs/
+# Target host lists for the Collect tab.
+input/
+# Scratch harnesses from GUI work: generated copies of the launcher, and
+# Playwright's session directory. Neither is part of the tool.
+.gui-harness.tmp.ps1
+.playwright-mcp/
+putty/
+soimport.conf
+# The Settings tab's choices (drop folder, archive folder) - per machine.
+settings.conf
+# The default archive: zipped raw EVTX.
+archive/
+# Accountability PCAP captures (Settings tab) - the operator's own traffic.
+pcap/
+# Who has this install open (one operator at a time).
+evtxer.lock
+
+# Claude Code: per-machine permission rules (personal, may name scratchpad paths).
+.claude/settings.local.json

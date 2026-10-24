@@ -1,0 +1,137 @@
+SETTING UP A PLAIN ELASTIC STACK FOR EVTXER
+=======================================================================
+
+Tested end to end against Elasticsearch + Kibana 8.7.0:
+the role below lets the Upload tab do everything it needs, and refuses
+everything else. Do these steps once per stack, logged in as an admin.
+
+
+THE TWO PIECES - DO NOT MIX THEM UP
+-----------------------------------
+
+  ROLE  hayabusa_upload   = permissions only. No username, no password.
+  USER  hayabusa_svc      = the login (username + password). Gets the role.
+
+The password belongs to the USER. That username + password is what gets
+typed into EVTXER's Upload tab.
+
+
+BEFORE YOU START
+----------------
+
+1. Log in to Kibana with "Log in with Elasticsearch" as an admin account.
+   The SAML / SSO login usually cannot manage users and roles.
+
+2. If Stack Management pages come up BLANK when browsing by IP, browse to
+   the stack's Kibana hostname instead (e.g. https://kibana.<your-domain>)
+   just for this setup, or use Dev Tools (section "PASTE IT INSTEAD").
+
+3. Check the tool can reach Elasticsearch: open https://<ES-IP>:9200/ in a
+   browser. A login prompt or JSON with "number" : "8.7.0" = good.
+   A timeout = ask the stack admin for the Elasticsearch address / port.
+
+
+STEP 1 - CREATE THE ROLE
+------------------------
+
+Menu -> Stack Management -> Security: Roles -> Create role
+(Create role is at the TOP RIGHT - scroll up if you do not see it.)
+
+  Role name:            hayabusa_upload
+
+  Elasticsearch
+    Cluster privileges: monitor
+                        manage_index_templates
+    Run As privileges:  (leave empty)
+    Index privileges:
+      Indices:          hayabusa-*        <- press ENTER so it becomes a tag
+      Privileges:       create_index
+                        write
+                        read
+                        maintenance
+                        monitor
+      Field / document level switches: leave OFF
+
+  Kibana                (leave empty - do not add a Kibana privilege)
+
+  -> Create role
+
+Why each one (so nobody "trims" one later and breaks the tool):
+  monitor (cluster)       "Verify connectivity" - cluster name, version,
+                          health. Without it the tool stops at Verify.
+  manage_index_templates  installs the hayabusa-evtx field template
+  create_index            first upload creates the index
+  write                   the upload itself, and "Replace hosts"
+  read                    host check, record counts, time range
+  maintenance             refresh after upload
+  monitor (index)         "Check availability" - lists hayabusa-* indices
+
+
+STEP 2 - CREATE THE USER
+------------------------
+
+Stack Management -> Security: Users -> Create user
+
+  Username:          hayabusa_svc
+  Full name:         Hayabusa upload service
+  Password:          a real, long password - store it like any other
+                     team service credential
+  Roles:             hayabusa_upload   (nothing else)
+
+  -> Create user
+
+Analysts WITH their own Elasticsearch login (they use "Log in with
+Elasticsearch"): you may instead add hayabusa_upload to their own user.
+Roles add up; they keep what they had. Uploads then show who did them.
+
+Analysts who log in with SAML / SSO: their accounts have no password
+Elasticsearch knows, so they CANNOT be used in the tool. They use the shared
+hayabusa_svc login.
+
+
+PASTE IT INSTEAD (Menu -> Dev Tools -> Console)
+-----------------------------------------------
+
+Same result as steps 1 and 2. Click the green arrow on each block; each
+should answer "created": true.
+
+PUT _security/role/hayabusa_upload
+{
+  "cluster": ["monitor", "manage_index_templates"],
+  "indices": [
+    { "names": ["hayabusa-*"],
+      "privileges": ["create_index", "write", "read", "maintenance", "monitor"] }
+  ]
+}
+
+PUT _security/user/hayabusa_svc
+{
+  "password": "<long password>",
+  "roles": ["hayabusa_upload"],
+  "full_name": "Hayabusa upload service"
+}
+
+
+STEP 3 - USE IT IN EVTXER (Upload tab)
+------------------------------------------------
+
+  Host / IP:    the Elasticsearch IP (not the Kibana hostname)
+  Port:         9200
+  Username:     hayabusa_svc
+  Password:     the password from step 2
+  Fingerprint:  press Fetch, then confirm the value with the stack admin
+  -> VERIFY CONNECTIVITY  should show "OK ... Elasticsearch 8.7.0"
+
+Expected, harmless: after an upload there is no "Open in Kibana" link
+(this account cannot read Kibana's own index). Open Discover by hand.
+The account also cannot DELETE an index - the admin does that under
+Stack Management -> Index Management.
+
+
+STEP 4 - DASHBOARDS (once per stack, admin account)
+-------------------------------------------------
+
+Import hayabusa-kibana-objects-8.7.ndjson through Stack Management ->
+Saved Objects -> Import. Full steps: IMPORT.txt in this folder.
+Analysts who only VIEW dashboards need read on hayabusa-* plus Kibana
+read access to Dashboard and Discover - no upload role.
