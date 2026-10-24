@@ -7,6 +7,8 @@ rem EVTXER runs as administrator: plain WinRM writes this
 rem PC's TrustedHosts and needs it. Not elevated yet, this file starts itself
 rem again elevated - Windows asks once. Refused, it starts without, and the tool
 rem says what that limits.
+rem   - Windows programs by full path, so a fltmc.exe or powershell.exe
+rem     dropped beside this file cannot run instead (cmd looks here first).
 rem   - fltmc, not net session: net session also fails when the Server service
 rem     is off, and the elevated copy would then relaunch itself for ever.
 rem   - The relaunched copy gets "evtxer-elevated" and never relaunches again
@@ -16,10 +18,10 @@ rem     broke the command), and a mapped drive letter is turned into its
 rem     \server\share path - the elevated copy cannot see the user's mappings.
 if /i "%~1"=="evtxer-elevated" goto run
 if "%EVTXER_NO_ELEVATE%"=="1" goto run
-fltmc >nul 2>&1
+"%SystemRoot%\System32\fltmc.exe" >nul 2>&1
 if not errorlevel 1 goto run
 set "EVTXER_SELF=%~f0"
-powershell.exe -NoProfile -Command "$p = $env:EVTXER_SELF; if ((New-Object IO.DriveInfo ([IO.Path]::GetPathRoot($p))).DriveType -eq 'Network' -and $p -match '^[A-Za-z]:') { $r = (Get-PSDrive $p.Substring(0,1) -ErrorAction SilentlyContinue).DisplayRoot; if (-not $r) { exit 2 }; $p = $r.TrimEnd('\') + $p.Substring(2) }; try { Start-Process -FilePath $p -ArgumentList 'evtxer-elevated' -Verb RunAs -ErrorAction Stop; exit 0 } catch { exit 1 }"
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command "$p = $env:EVTXER_SELF; if ((New-Object IO.DriveInfo ([IO.Path]::GetPathRoot($p))).DriveType -eq 'Network' -and $p -match '^[A-Za-z]:') { $r = (Get-PSDrive $p.Substring(0,1) -ErrorAction SilentlyContinue).DisplayRoot; if (-not $r) { exit 2 }; $p = $r.TrimEnd('\') + $p.Substring(2) }; try { Start-Process -FilePath $p -ArgumentList 'evtxer-elevated' -Verb RunAs -ErrorAction Stop; exit 0 } catch { exit 1 }"
 if not errorlevel 1 exit /b 0
 if errorlevel 2 (
   echo This copy runs from a mapped drive letter that cannot be found as a \server\share path,
@@ -29,7 +31,7 @@ if errorlevel 2 (
 )
 echo SMB and WinRM over HTTPS still work; plain WinRM needs administrator.
 :run
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0code\HayabusaMissionTool.ps1"
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0code\HayabusaMissionTool.ps1"
 rem A crash used to close this window before the error could be read, so on
 rem a non-zero exit it stays open.
 if errorlevel 1 (

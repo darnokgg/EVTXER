@@ -701,6 +701,122 @@ function ConvertTo-HostList([string]$Text, [string]$FilePath) {
     @($seen.Values)
 }
 
+function ConvertTo-ExportFileName([string]$LogName) {
+    # The file wevtutil writes a log to on the target. The log name comes from
+    # the target (ALL mode reads `wevtutil el`), so every character Windows
+    # forbids in a file name becomes '_' - a ':' would otherwise write an
+    # alternate data stream, a '\' or '/' a subfolder.
+    return (($LogName -replace '[\\/:*?"<>|\x00-\x1f]', '_') + '.evtx')
+}
+
+function Get-StagingListing {
+    # Runs ON THE TARGET (Invoke-Command -ScriptBlock this function): what lies
+    # in the staging area, one flat row per entry - the top-level candidates
+    # (this run's folder and archive, and every EVTX_Export*/LOOT_Export) and
+    # the direct children of each candidate folder. Nothing is deleted here;
+    # Get-StagingDeletePlan decides, on this machine, where it is tested.
+    # Cmdlets and string operations only: a target whose PowerShell runs in
+    # ConstrainedLanguage (AppLocker, WDAC) refuses .NET method calls, and a
+    # cleanup that throws leaves copies of the Security log behind. Owners are
+    # SIDs read from the SDDL, because account NAMES are translated
+    # ("VORDEFINIERT\Administratoren"). Flat rows, because remoting flattens
+    # nested objects to strings.
+    param([string]$Parent, [string[]]$Filters, [string[]]$Current)
+    $me = ''
+    # By full path: never a whoami that happens to come first on PATH.
+    foreach ($w in @(& "$env:SystemRoot\System32\whoami.exe" /user /fo csv /nh 2>$null)) { if ("$w" -match '"(S-1-[0-9-]+)"\s*$') { $me = $Matches[1] } }
+    $row = {
+        param($i, [string]$Top)
+        $sddl = try { "$((Get-Acl -LiteralPath $i.FullName -ErrorAction Stop).Sddl)" } catch { '' }
+        # A hashtable, not [pscustomobject]: ConstrainedLanguage refuses that cast.
+        @{
+            Path = $i.FullName; Name = $i.Name; Top = $Top; Me = $me
+            IsDir = [bool]$i.PSIsContainer; IsLink = ("$($i.Attributes)" -match 'ReparsePoint')
+            Owner = $(if ($sddl -match '^O:(\S+?)G:') { $Matches[1] } else { '' })
+            LastWrite = $i.LastWriteTime
+        }
+    }
+    $tops = @()
+    foreach ($p in $Current) { $tops += @(Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue) }
+    foreach ($f in $Filters) { $tops += @(Get-ChildItem -LiteralPath $Parent -Filter $f -Force -ErrorAction SilentlyContinue) }
+    $done = @()
+    foreach ($t in $tops) {
+        if (-not $t -or $done -contains $t.FullName) { continue }
+        $done += $t.FullName
+        & $row $t ''
+        if ($t.PSIsContainer -and -not ("$($t.Attributes)" -match 'ReparsePoint')) {
+            foreach ($c in @(Get-ChildItem -LiteralPath $t.FullName -Force -ErrorAction SilentlyContinue)) { & $row $c $t.FullName }
+        }
+    }
+}
+
+function Test-StagingOwner([string]$Owner, [string]$Me) {
+    # SYSTEM, the Administrators group, the built-in Administrator (SDDL
+    # writes its SID as LA, whoami as S-1-5-21-...-500) or the account doing
+    # the collection - as SIDs or their SDDL aliases. An ordinary user cannot
+    # create an entry any of these owns, nor replace one.
+    if (-not "$Owner") { return $false }
+    if (@('SY', 'BA', 'LA', 'S-1-5-18', 'S-1-5-32-544') -contains $Owner) { return $true }
+    return ("$Me" -and ($Owner -eq $Me -or ($Owner -eq 'LA' -and "$Me" -match '-500$')))
+}
+
+function Get-StagingDeletePlan {
+    # What may go, from Get-StagingListing's rows. The staging area is in
+    # C:\Windows\Temp, where ordinary users can create entries, and this runs
+    # as administrator, so it deletes only what a user can neither create nor
+    # swap: files directly in an administrator's staging folder (or this
+    # run's), never a link, never a subfolder (the collector only ever writes
+    # flat *.evtx files). A folder
+    # is then removed only if that left it empty. A walk down a tree could be
+    # turned by swapping a subfolder for a junction mid-delete; this has no
+    # tree to walk. Everything not taken is reported, not touched.
+    # $Current: this run's own folder and archive, taken whatever their age;
+    # anything else only once Test-StaleStagingItem calls it abandoned.
+    param($Listing, [string[]]$Current, [datetime]$Now = (Get-Date))
+    $files = @(); $dirs = @(); $left = @()
+    foreach ($t in @($Listing | Where-Object { -not $_.Top })) {
+        $ours = @($Current) -contains $t.Path
+        if (-not $ours -and -not (Test-StaleStagingItem -Name $t.Name -LastWrite $t.LastWrite -Now $Now)) { continue }
+        # This run's own items need no owner test: New-Item without -Force
+        # proved the folder new, and a user cannot rename or replace an
+        # administrator's entry in C:\Windows\Temp. Anything else must be an
+        # administrator's to be swept.
+        if ($t.IsLink -or (-not $ours -and -not (Test-StagingOwner $t.Owner $t.Me))) { $left += $t.Path; continue }
+        if (-not $t.IsDir) { $files += $t.Path; continue }
+        foreach ($c in @($Listing | Where-Object { $_.Top -eq $t.Path })) {
+            # Inside an administrator's folder a user cannot swap a name, so
+            # deleting a plain file only removes that file - whoever made it.
+            if ($c.IsLink -or $c.IsDir) { $left += $c.Path }
+            else { $files += $c.Path }
+        }
+        $dirs += $t.Path
+    }
+    return [pscustomobject]@{ Files = $files; Dirs = $dirs; Left = $left }
+}
+
+function Remove-StagingPlan {
+    # Runs ON THE TARGET: deletes exactly Get-StagingDeletePlan's files, then
+    # each folder if it is now empty (never -Recurse), and returns which of
+    # $Check is still there. Cmdlets only - see Get-StagingListing.
+    param([string[]]$Files, [string[]]$Dirs, [string[]]$Check)
+    foreach ($f in $Files) { if ($f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } }
+    foreach ($d in $Dirs) {
+        if ($d -and -not @(Get-ChildItem -LiteralPath $d -Force -ErrorAction SilentlyContinue).Count) {
+            try { Remove-Item -LiteralPath $d -Force -ErrorAction Stop } catch { }
+        }
+    }
+    @($Check | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+}
+
+function Test-TargetName([string]$Name) {
+    # A host name, FQDN, IPv4 or IPv6 address - nothing else. A target list
+    # can come from someone else's file, and the name goes into TrustedHosts
+    # ('*' would trust every host for the run), into the evidence folder's
+    # path ('..\x' would climb out of it) and onto plink's command line ('-x'
+    # would be read as an option). Must start with a letter or digit.
+    return ("$Name" -match '^[A-Za-z0-9][A-Za-z0-9._:-]*$')
+}
+
 # ------------------------------------------------------- Task 4: ConvertTo-EvtxFileName ---
 function ConvertTo-EvtxFileName([string]$LogName) {
     ($LogName -replace '/', '%4') + '.evtx'
@@ -1205,19 +1321,24 @@ function ConvertTo-ProcessArgumentLine([string[]]$Arguments) {
     # invoked through Start-Process has to be quoted here first. The "& $exe
     # @args" call style does not need this - PowerShell quotes for it.
     if (-not $Arguments -or $Arguments.Count -eq 0) { return '' }
+    # The rules CommandLineToArgvW (and every C runtime) parses by: inside
+    # quotes, N backslashes before a '"' are written as 2N+1 and the quote as
+    # \", N before the closing quote as 2N, any other backslash as itself. An
+    # embedded quote used to end the argument early - a username or path
+    # with a '"' split into two arguments - and an empty argument vanished.
     $parts = foreach ($a in $Arguments) {
-        if ($a -match '[\s"]') {
-            # A backslash immediately before the closing quote would escape it
-            # and swallow the rest of the command line, so trailing backslashes
-            # are doubled. Done by measurement rather than -replace: the regex
-            # form matches the empty string at the end and silently does
-            # nothing.
-            $tail = [regex]::Match($a, '\\*$').Value
-            $head = $a.Substring(0, $a.Length - $tail.Length)
-            '"' + $head + $tail + $tail + '"'
-        } else {
-            $a
+        if ($null -eq $a) { continue }
+        if ($a -ne '' -and $a -notmatch '[\s"]') { $a; continue }
+        $sb = New-Object System.Text.StringBuilder('"')
+        $slashes = 0
+        foreach ($c in $a.ToCharArray()) {
+            if ($c -eq '\') { $slashes++; continue }
+            if ($c -eq '"') { [void]$sb.Append('\', 2 * $slashes + 1).Append('"') }
+            else            { [void]$sb.Append('\', $slashes).Append($c) }
+            $slashes = 0
         }
+        [void]$sb.Append('\', 2 * $slashes).Append('"')
+        $sb.ToString()
     }
     return ($parts -join ' ')
 }
@@ -1943,7 +2064,8 @@ function Test-CollectReadiness {
         throw "unknown collection method: $Method"
     }
     $missing = @()
-    if (@($Targets | Where-Object { "$_".Trim() }).Count -eq 0) { $missing += 'Targets' }
+    $invalid = @($Targets | Where-Object { "$_".Trim() -and -not (Test-TargetName "$_".Trim()) } | ForEach-Object { "$_".Trim() })
+    if (@($Targets | Where-Object { "$_".Trim() }).Count -eq 0 -or $invalid.Count) { $missing += 'Targets' }
     if (-not "$Method".Trim())   { $missing += 'Method' }
     if (-not "$Username".Trim()) { $missing += 'Username' }
     if ($Category -eq 'Custom' -and @($CustomLogs | Where-Object { "$_".Trim() }).Count -eq 0) {
@@ -1952,6 +2074,8 @@ function Test-CollectReadiness {
     return [pscustomobject]@{
         Ready   = ($missing.Count -eq 0)
         Missing = $missing
+        # Targets that are not a host name or address (Test-TargetName).
+        Invalid = $invalid
     }
 }
 
@@ -2046,7 +2170,15 @@ function Get-CollectLogKind([string]$Line) {
 function Export-CollectResults($Hosts, [string]$Path) {
     # Beside the evidence folders, so the record of what came back travels
     # with what came back. Opens straight into Excel.
-    @($Hosts) | Select-Object Target, Account, Outcome, Collected, Requested, Folder, Detail |
+    # The text columns carry target names, error text from the target and log
+    # names, and the file opens in Excel: no cell may start a formula - the
+    # same rule as the activity log (ConvertTo-LedgerCell).
+    @($Hosts) | Select-Object @{ n = 'Target';  e = { ConvertTo-LedgerCell $_.Target } },
+                              @{ n = 'Account'; e = { ConvertTo-LedgerCell $_.Account } },
+                              @{ n = 'Outcome'; e = { ConvertTo-LedgerCell $_.Outcome } },
+                              Collected, Requested,
+                              @{ n = 'Folder';  e = { ConvertTo-LedgerCell $_.Folder } },
+                              @{ n = 'Detail';  e = { ConvertTo-LedgerCell $_.Detail } } |
         Export-Csv -LiteralPath $Path -NoTypeInformation -Encoding UTF8
     return $Path
 }
@@ -3276,6 +3408,9 @@ function Get-PlinkArgs {
     # Fetch probe: plink then refuses the unknown server and names its key.
     param([string]$HostName, [int]$Port = 22, [string]$User, [string]$HostKey,
           [string]$PasswordFile, [string]$Command)
+    # The host is positional: one starting with '-' would be read as an
+    # option (-proxycmd runs a local command).
+    if (-not (Test-TargetName $HostName)) { throw "not a host name or address: '$HostName'" }
     $a = @('-ssh', '-batch', '-P', "$Port")
     if ($User)         { $a += @('-l', $User) }
     if ($HostKey)      { $a += @('-hostkey', $HostKey) }
@@ -3290,6 +3425,7 @@ function Get-PscpArgs {
     # the SFTP subsystem, and plain scp needs nothing on the far side.
     param([string]$HostName, [int]$Port = 22, [string]$User, [string]$HostKey,
           [string]$PasswordFile, [string]$LocalFile, [string]$RemotePath)
+    if (-not (Test-TargetName $HostName)) { throw "not a host name or address: '$HostName'" }
     return ,@('-batch', '-scp', '-P', "$Port", '-l', $User, '-hostkey', $HostKey, '-pwfile', $PasswordFile,
               $LocalFile, ("{0}:{1}" -f $HostName, $RemotePath))
 }
@@ -3456,7 +3592,10 @@ function Get-ManualCollectCommand {
         return (($head + $body) -join "`r`n")
     }
 
-    $stage = New-EvtxStagingPath
+    # The run token is drawn when the script RUNS, per host: a fixed one
+    # would, on a second paste after a failed run, find the first run's
+    # folder and copy its exports back as if they were new.
+    $stageBase = (Get-EvtxStagingPaths)[0]
     $session = '    $s = New-PSSession -ComputerName $h.Name -Credential $cred'
     if ($Method -eq 'WinRM-HTTPS') {
         $session += ' -UseSSL -Port 5986'
@@ -3477,26 +3616,29 @@ function Get-ManualCollectCommand {
     }
     $enum = if ($all) { "        if (`$logs -eq 'ALL') { `$logs = @(wevtutil el) }" } else { $null }
     $body = @(
-        "`$stage = $(ConvertTo-PsLiteral $stage)"
+        "`$stageBase = $(ConvertTo-PsLiteral $stageBase)  # + _<8 hex> per host: EVTX_Export_0a1b2c3d"
     ) + $trusted + @(
         ''
         '# WinRM: export each log ON the target with wevtutil (it reads logs Windows'
         '# holds open), pull the files back, then delete the staging folder.'
         'foreach ($h in $hosts) {'
         '    $cred = New-Object System.Management.Automation.PSCredential($h.Account, $pw)'
+        '    $stage = $stageBase + ''_'' + [guid]::NewGuid().ToString(''N'').Substring(0, 8)'
         $session
         '    $dest = Join-Path $out (''{0}_{1}'' -f $h.Name, (Get-Date -Format ''yyyyMMdd_HHmm''))'
         '    New-Item -ItemType Directory -Path $dest -Force | Out-Null'
-        '    Invoke-Command -Session $s -ArgumentList $stage, $logs -ScriptBlock {'
+        '    # A failed export skips the host - nothing is copied that this run did not write.'
+        '    try { Invoke-Command -Session $s -ErrorAction Stop -ArgumentList $stage, $logs -ScriptBlock {'
         '        param($stage, $logs)'
         $enum
-        '        New-Item -ItemType Directory -Path $stage -Force | Out-Null'
+        '        New-Item -ItemType Directory -Path $stage -ErrorAction Stop | Out-Null'
+        '        icacls $stage /inheritance:r /grant:r ''*S-1-5-18:(OI)(CI)F'' ''*S-1-5-32-544:(OI)(CI)F'' | Out-Null'
         '        foreach ($l in $logs) {'
-        '            wevtutil epl $l (Join-Path $stage (($l -replace ''[/\\]'', ''_'') + ''.evtx'')) /overwrite:true'
+        '            wevtutil epl $l (Join-Path $stage (($l -replace ''[/\\:*?"<>|]'', ''_'') + ''.evtx'')) /overwrite:true'
         '        }'
-        '    }'
+        '    } } catch { Write-Warning "$($h.Name): export failed, nothing copied - $_"; Remove-PSSession $s; continue }'
         '    Copy-Item -FromSession $s -Path "$stage\*.evtx" -Destination $dest'
-        '    Invoke-Command -Session $s -ArgumentList $stage -ScriptBlock { param($stage) Remove-Item -LiteralPath $stage -Recurse -Force }'
+        '    Invoke-Command -Session $s -ArgumentList $stage -ScriptBlock { param($stage) Get-ChildItem -LiteralPath $stage -File -Force | Remove-Item -Force; Remove-Item -LiteralPath $stage -Force }'
         '    Remove-PSSession $s'
         '    Get-ChildItem $dest -Filter *.evtx | Get-FileHash -Algorithm SHA256 |'
         '        Export-Csv (Join-Path $dest ''hashes.csv'') -NoTypeInformation'

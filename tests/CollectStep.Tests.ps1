@@ -11,20 +11,7 @@
 # the session is carried.
 . "$PSScriptRoot\..\code\EvtxCollector.ps1"
 
-function New-PipeSession {
-    $p = Start-Process powershell -ArgumentList '-NoProfile', '-NoExit', '-Command', '$null' -PassThru -WindowStyle Hidden
-    $ci = New-Object System.Management.Automation.Runspaces.NamedPipeConnectionInfo($p.Id)
-    $rs = [runspacefactory]::CreateRunspace($ci)
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
-    while ($true) {
-        try { $rs.Open(); break }
-        catch { if ([DateTime]::UtcNow -gt $deadline) { throw }; Start-Sleep -Milliseconds 300; $rs = [runspacefactory]::CreateRunspace($ci) }
-    }
-    $ctor = [System.Management.Automation.Runspaces.PSSession].GetConstructors('NonPublic,Instance') |
-        Where-Object { $a = $_.GetParameters(); $a.Count -eq 1 -and $a[0].ParameterType.Name -eq 'RemoteRunspace' } |
-        Select-Object -First 1
-    [pscustomobject]@{ Session = $ctor.Invoke(@($rs)); Process = $p }
-}
+. "$PSScriptRoot\PipeSession.ps1"
 
 $pipe = $null
 $dir = Join-Path ([IO.Path]::GetTempPath()) ("step-{0}" -f [guid]::NewGuid().ToString('N').Substring(0, 8))

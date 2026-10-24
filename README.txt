@@ -33,6 +33,9 @@ things to know about running elevated:
   - If UAC asks for a DIFFERENT admin account, EVTXER runs as that account:
     passwords remembered under your own account are not found (tick Remember
     again), and links EVTXER opens start the browser as that account too.
+  - Keep the EVTXER folder writable by administrators only. It runs with
+    admin rights, so anyone who can change its files (the scripts, or the
+    dumpcap path in code\settings.conf) could run their own code as admin.
 
 If it still refuses, the policy is set by Group Policy, which overrides the
 command line - that needs the machine's admin, not this tool.

@@ -490,11 +490,15 @@ function Get-ReadyCollectFormState([switch]$LogRefusal) {
     $ready = Get-CollectFormReadiness $state
     Set-CollectHighlight $ready.Missing
     if (-not $ready.Ready) {
-        $lblCollectStatus.Text = "Fill the fields marked in red: $($ready.Missing -join ', ')"
+        # A target that is not a host name or address is named, not just
+        # painted red: "Targets" alone does not say which line is wrong.
+        $why = if (@($ready.Invalid).Count) { "Not a host name or IP address: $(@($ready.Invalid) -join ', ')" }
+               else { "Fill the fields marked in red: $($ready.Missing -join ', ')" }
+        $lblCollectStatus.Text = $why
         $lblCollectStatus.Foreground = $script:BrushCaution
         # Only Collect logs the refusal: Verify Access repaints and says
         # nothing, because the operator is still filling the form in.
-        if ($LogRefusal) { Write-Log "Not started - missing: $($ready.Missing -join ', ')`n" 'err' }
+        if ($LogRefusal) { Write-Log "Not started - $why`n" 'err' }
         return $null
     }
     return $state

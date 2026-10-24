@@ -24,7 +24,7 @@ Assert-True ($p[0] -match 'EVTXER\.cmd' -and $p[1] -match 'Start-Service WinRM')
 Assert-Equal @(Get-LocalWinRmProblems 'WinRM-HTTPS' -Elevated $false -ServiceStatus 'Stopped').Count 0 "HTTPS needs neither"
 Assert-Equal @(Get-LocalWinRmProblems 'SMB' -Elevated $false -ServiceStatus 'Stopped').Count 0 "nor does SMB"
 $cmd = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes((Join-Path $root 'EVTXER.cmd')))
-Assert-True ($cmd -match '(?m)^fltmc >nul' -and $cmd -match '-Verb RunAs') "the .cmd asks Windows for administrator rights (fltmc: no service needed to tell)"
+Assert-True ($cmd -match '(?m)^"%SystemRoot%\\System32\\fltmc\.exe" >nul' -and $cmd -match '-Verb RunAs') "the .cmd asks Windows for administrator rights (fltmc: no service needed to tell)"
 Assert-True ($cmd -notmatch '(?m)^net session') "not net session, which fails with the Server service off and looped the relaunch"
 Assert-True ($cmd -match "-ArgumentList 'evtxer-elevated'" -and $cmd -match '(?m)^if /i "%~1"=="evtxer-elevated" goto run') "the relaunched copy never relaunches again"
 Assert-True ($cmd -match '\$env:EVTXER_SELF' -and $cmd -notmatch "'%~f0'") "the path travels in the environment, not a quoted string"

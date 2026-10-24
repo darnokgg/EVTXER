@@ -10,7 +10,7 @@ function Remove-EvtxStaging {
     # thing on two different rules:
     #
     #   1. THIS run's staging folder and its archive - ours beyond doubt, so
-    #      they go unconditionally.
+    #      they go whatever their age.
     #   2. anything else of ours still lying in the staging parent - per-run
     #      folders and archives orphaned by a hard kill, plus the fixed names
     #      older builds wrote to - but only once it is old enough that nobody
@@ -25,48 +25,39 @@ function Remove-EvtxStaging {
         # Whether this run built an archive beside the staging folder. Only
         # then can one be left behind - a lost session used to report a .zip
         # that was never written.
-        [switch]$ZipAttempted
+        [switch]$ZipAttempted,
+        # Where to sweep. Only tests change it: C:\Windows\Temp cannot be
+        # listed without administrator rights.
+        [string[]]$KnownPaths = @(Get-EvtxStagingPaths)
     )
-    $known  = @(Get-EvtxStagingPaths)
-    $doomed = @()
+    $known  = @($KnownPaths)
 
-    # This run's own artifacts. Ours beyond any doubt, so they go regardless of
-    # age - including the archive, which Compress-Archive writes BESIDE the
-    # staging folder rather than inside it. Nothing but this line and the
-    # normal-path cleanup ever names it, so a session that dropped after the
-    # archive was built used to strand it on the target for good.
-    if ($CurrentPath) {
-        $doomed += $CurrentPath
-        $doomed += "$CurrentPath.zip"
-    }
-
-    # Everything else is swept by age, never on sight - see Test-StaleStagingItem.
-    # The filters are derived from the library's list rather than written out
-    # here, so the names still live in exactly one place.
+    # This run's own artifacts are taken whatever their age - including the
+    # archive, which Compress-Archive writes BESIDE the staging folder rather
+    # than inside it. Nothing but this and the normal-path cleanup ever names
+    # it, so a session that dropped after the archive was built used to strand
+    # it on the target for good. Everything else is swept by age, never on
+    # sight (Test-StaleStagingItem). The filters come from the library's list,
+    # so the names still live in exactly one place.
+    $current = @()
+    if ($CurrentPath) { $current = @($CurrentPath, "$CurrentPath.zip") }
     $parent  = Split-Path -Parent $known[0]
     $leaves  = @($known | ForEach-Object { Split-Path -Leaf $_ })
     $filters = @("$($leaves[0])*") + @($leaves | Select-Object -Skip 1)
+
+    # Look on the target, decide here, delete exactly that on the target - see
+    # Get-StagingListing and Get-StagingDeletePlan for why it is three steps.
+    $plan = [pscustomobject]@{ Files = @(); Dirs = @(); Left = @() }
     try {
-        $siblings = @(Invoke-Command -Session $Session -ErrorAction Stop -ScriptBlock {
-            # Filtered at the provider: C:\Windows\Temp on a busy server holds
-            # thousands of entries and only ours are any of our business. Files
-            # as well as directories, because the archive is a file.
-            $found = @()
-            foreach ($f in $using:filters) {
-                $found += @(Get-ChildItem -LiteralPath $using:parent -Filter $f -Force -ErrorAction SilentlyContinue |
-                            Select-Object Name, FullName, LastWriteTime)
-            }
-            $found
-        })
-        $now = Get-Date
-        foreach ($s in $siblings) {
-            if (Test-StaleStagingItem -Name $s.Name -LastWrite $s.LastWriteTime -Now $now) {
-                $doomed += $s.FullName
-            }
+        $rows = @(Invoke-Command -Session $Session -ErrorAction Stop -ScriptBlock ${function:Get-StagingListing} `
+                    -ArgumentList $parent, ([string[]]$filters), ([string[]]$current))
+        $plan = Get-StagingDeletePlan -Listing $rows -Current $current
+        if ($LogWriter) {
+            foreach ($l in $plan.Left) { & $LogWriter "  [--] Left alone (a link, a subfolder, or not made by an administrator): $l" }
         }
     }
     catch {
-        if ($LogWriter) { & $LogWriter "  [--] Could not sweep old staging items: $($_.Exception.Message)" }
+        if ($LogWriter) { & $LogWriter "  [--] Could not list the staging area: $($_.Exception.Message)" }
     }
 
     # Reports what is still there rather than assuming the delete worked: the
@@ -75,12 +66,8 @@ function Remove-EvtxStaging {
     $mine = @()
     if ($CurrentPath) { $mine += $CurrentPath; if ($ZipAttempted) { $mine += "$CurrentPath.zip" } }
     try {
-        $left = @(Invoke-Command -Session $Session -ErrorAction Stop -ScriptBlock {
-            foreach ($d in $using:doomed) {
-                Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            @($using:mine | Where-Object { Test-Path -LiteralPath $_ })
-        })
+        $left = @(Invoke-Command -Session $Session -ErrorAction Stop -ScriptBlock ${function:Remove-StagingPlan} `
+                    -ArgumentList ([string[]]$plan.Files), ([string[]]$plan.Dirs), ([string[]]$mine))
         return [pscustomobject]@{ Clean = ($left.Count -eq 0); Left = $left; Reason = 'could not be deleted' }
     }
     catch {
@@ -92,6 +79,10 @@ function Remove-EvtxStaging {
 }
 
 function Add-CollectTrustedHosts([string[]]$Targets) {
+    # Only real host names and addresses: '*' would trust every host for the
+    # run (Test-TargetName). The Collect tab refuses them first; this is the
+    # second line.
+    $Targets = @($Targets | ForEach-Object { "$_".Trim() } | Where-Object { Test-TargetName $_ })
     # A workgroup target has no Kerberos, so WinRM refuses it unless it is in
     # the client's TrustedHosts. Both Collect and Verify Access call this; only
     # Collect used to, so Verify failed on exactly the hosts that needed it.
@@ -359,6 +350,15 @@ function Invoke-EvtxCollection {
     try {
         # Inside the try (not before it) so that if this step itself throws,
         # the finally block below still runs and purges the credential.
+        # Behind the Collect tab's own check: a name that is not a host or an
+        # address never reaches TrustedHosts, the evidence folder's path or a
+        # session ('..\x' would climb out of evtx\).
+        foreach ($bad in @($Targets | Where-Object { "$_".Trim() -and -not (Test-TargetName "$_".Trim()) })) {
+            & $LogWriter "  [SKIPPED] '$bad' - not a host name or address"
+            $skipped++
+            $hostResults += New-CollectHostResult "$bad" '' 'Skipped' 0 0 '' 'not a host name or address'
+        }
+        $Targets = @($Targets | ForEach-Object { "$_".Trim() } | Where-Object { Test-TargetName $_ })
         if (Test-NeedsTrustedHosts $Method) { $savedTrustedHosts = Add-CollectTrustedHosts $Targets }
 
         $hostList  = @($Targets | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -581,7 +581,14 @@ function Invoke-EvtxCollection {
                     $stagingPath = New-EvtxStagingPath
                     $asked = (Get-Date).ToUniversalTime()
                     $theirs = Invoke-Command -Session $session -ErrorAction Stop -ScriptBlock {
-                        New-Item -ItemType Directory -Path $using:stagingPath -Force | Out-Null
+                        # No -Force: the name is new, so finding it already
+                        # there means someone else made it - stop, never reuse.
+                        New-Item -ItemType Directory -Path $using:stagingPath -ErrorAction Stop | Out-Null
+                        # SYSTEM and Administrators only. C:\Windows\Temp lets
+                        # every user create entries and passes that right down,
+                        # so a user could otherwise plant a file or a link in
+                        # the folder the exports are written to.
+                        $null = icacls $using:stagingPath /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' 2>&1
                         (Get-Date).ToUniversalTime()
                     }
                     # The target's clock against ours, so the tagging window
@@ -633,7 +640,7 @@ function Invoke-EvtxCollection {
                         Set-CollectProgress $Progress @{
                             Step = 'exporting'; LogIndex = $logIndex; LogCount = $logNames.Count; LogName = $log
                         }
-                        $exportName = ($log -replace '[/\\]', '_') + '.evtx'
+                        $exportName = ConvertTo-ExportFileName $log
                         $exportPath = "$stagingPath\$exportName"
                         & $LogWriter "  -> Exporting $log..."
 
@@ -780,8 +787,16 @@ function Invoke-EvtxCollection {
                                 # leave half-written .evtx files in the folder.
                                 $unpack = Join-Path $outFolder $script:UnzipStagingName
                                 Expand-Archive -LiteralPath $localZip -DestinationPath $unpack -Force -ErrorAction Stop
+                                # Only the files this run exported: the target
+                                # built the archive, and a compromised target
+                                # could add files of its own choosing to it.
+                                $expected = @($exported | ForEach-Object { $_.Name })
                                 Get-ChildItem -LiteralPath $unpack -File | ForEach-Object {
-                                    Move-Item -LiteralPath $_.FullName -Destination (Join-Path $outFolder $_.Name) -Force -ErrorAction Stop
+                                    if ($expected -contains $_.Name) {
+                                        Move-Item -LiteralPath $_.FullName -Destination (Join-Path $outFolder $_.Name) -Force -ErrorAction Stop
+                                    } else {
+                                        & $LogWriter "  [--] Not exported by this run, left out of the evidence: $($_.Name)"
+                                    }
                                 }
                                 Remove-Item -LiteralPath $unpack -Recurse -Force -ErrorAction SilentlyContinue
                                 Remove-Item -LiteralPath $localZip -Force -ErrorAction SilentlyContinue
@@ -1145,7 +1160,9 @@ function Test-CollectAccess {
                         $localProbe    = Join-Path ([IO.Path]::GetTempPath()) ("transfer-probe-{0}.bin" -f [guid]::NewGuid().ToString('N').Substring(0,8))
                         $staging = Invoke-Command -Session $session -ScriptBlock {
                             try {
-                                New-Item -ItemType Directory -Path $using:probeDir -Force -ErrorAction Stop | Out-Null
+                                # Made and locked like a collection's staging folder.
+                                New-Item -ItemType Directory -Path $using:probeDir -ErrorAction Stop | Out-Null
+                                $null = icacls $using:probeDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' 2>&1
                                 # Small, but never empty: Test-CopiedFile counts a
                                 # 0-byte arrival as a failed transfer, and it should
                                 # do so here for the same reason it does there.
@@ -1176,7 +1193,9 @@ function Test-CollectAccess {
                         }
                         # Whatever happened above, the target goes back as it was.
                         Invoke-Command -Session $session -ErrorAction SilentlyContinue -ScriptBlock {
-                            Remove-Item -LiteralPath $using:probeDir -Recurse -Force -ErrorAction SilentlyContinue
+                            # The one file, then the folder - never -Recurse (see Remove-StagingPlan).
+                            Remove-Item -LiteralPath $using:probeFile -Force -ErrorAction SilentlyContinue
+                            Remove-Item -LiteralPath $using:probeDir -Force -ErrorAction SilentlyContinue
                         } | Out-Null
                     } finally {
                         Remove-PSSession -Session $session -ErrorAction SilentlyContinue
