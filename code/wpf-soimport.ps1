@@ -346,7 +346,7 @@ $btnSoImport.Add_Click({
             if ($s.DiskWarning) { $lblSoResult.Foreground = $script:SoBrush.warn }
             if ($r.Url) {
                 $script:SoUrl = $r.WideUrl
-                try { $hlSo.NavigateUri = New-Object System.Uri($r.Url) } catch { }
+                try { $hlSo.NavigateUri = New-Object System.Uri($r.WideUrl) } catch { }
                 $runSo.Text = 'Open the imported events in Security Onion'
                 $lnkSo.Visibility = 'Visible'
             }

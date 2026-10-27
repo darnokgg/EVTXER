@@ -46,3 +46,22 @@ Assert-True ($upload -match '\$script:ConnKey\s*-ne\s*\(Get-UploadConnKey\)')   
 Assert-True ($upload -match '(?s)function Get-UploadConnKey \{.*?rbTlsSkip.*?txtPin') "and so is a change of certificate trust"
 $queue = Get-Content "$PSScriptRoot\..\code\wpf-queue.ps1" -Raw
 Assert-True ($queue -match "(?s)if \(\`$step -eq 'upload'\) \{.*?Set-TlsTrustFromUi") "a queued upload puts back the Upload tab's trust before it starts"
+# The trust is process-wide: a queued upload starting during a Dashboards
+# import must not take away the 443 pin that import is using.
+$m = [regex]::Match($upload, '(?s)function Set-TlsTrustFromUi \{.*?\n\}')
+Assert-True ($m.Value -match '\$pins \+= \$txtKbPin\.Text') "the Upload tab's trust keeps the web UI's pin too"
+Assert-True ($m.Value -match "\`$txtPin\.Text\.Trim\(\) -and \`$txtKbPin -and \(ConvertTo-Thumbprint \`$txtKbPin\.Text\)\.Length -eq 64") "but only a well-formed one, and never in place of a missing 9200 pin"
+# Run it with stand-in fields: a half-typed web pin does not stop the upload,
+# a missing 9200 pin is still refused.
+. ([scriptblock]::Create($m.Value))
+function New-Box([string]$t) { [pscustomobject]@{ Text = $t; IsChecked = $false } }
+$good = 'AA' * 32
+$rbTlsSkip = New-Box ''; $txtPin = New-Box $good; $txtKbPin = New-Box 'AB:CD'
+Assert-True (Set-TlsTrustFromUi) "a half-typed web pin does not block the upload"
+Assert-True ([HayabusaCertPin]::Expected -contains $good -and @([HayabusaCertPin]::Expected).Count -eq 1) "and is not installed"
+$txtKbPin = New-Box ('BB' * 32)
+Assert-True (Set-TlsTrustFromUi) "a good web pin is fine"
+Assert-Equal @([HayabusaCertPin]::Expected).Count 2 "and installed beside the 9200 pin"
+$txtKbPin = $null
+Assert-True (Set-TlsTrustFromUi) "no Dashboards tab at all is fine"
+Set-TlsTrust -Mode 'System'

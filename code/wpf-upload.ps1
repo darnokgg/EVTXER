@@ -367,8 +367,15 @@ function Set-TlsTrustFromUi {
     # worker thread with no runspace, where even { $true } throws "There is no
     # Runspace available to run scripts in this thread" and every HTTPS request
     # fails. Nothing here may be "simplified" into a scriptblock.
+    # Both pins, like Set-KibanaTlsTrust: the callback is process-wide, and a
+    # queued upload that starts while the Dashboards tab is talking to 443
+    # would otherwise take that tab's pin away mid-import. Only a well-formed
+    # web pin is added: a half-typed one on the Dashboards tab must not stop
+    # uploads (the queue would show its refusal on every tick).
     if ($rbTlsSkip.IsChecked -eq $true) { Set-TlsTrust -Mode 'Skip'; return $true }
-    try { Set-TlsTrust -Mode 'Pin' -PinnedThumbprint $txtPin.Text; return $true }
+    $pins = @($txtPin.Text)
+    if ($txtPin.Text.Trim() -and $txtKbPin -and (ConvertTo-Thumbprint $txtKbPin.Text).Length -eq 64) { $pins += $txtKbPin.Text }
+    try { Set-TlsTrust -Mode 'Pin' -PinnedThumbprint $pins; return $true }
     catch {
         [void][System.Windows.MessageBox]::Show($_.Exception.Message, 'Certificate pin missing')
         return $false

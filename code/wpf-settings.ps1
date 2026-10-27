@@ -429,12 +429,14 @@ function Invoke-RulesUpdate([string]$ZipFile) {
     # A scan or conversion reads the rules: swapping them under one would
     # break it. The queue holds new ones from here on (Get-QueueBlockers) -
     # set BEFORE the PCAP question, whose window lets the queue's timer run.
+    # Asked before the PCAP question, so the operator is not asked it only to
+    # be turned away.
     $script:RulesUpdating = $true
-    if (-not $ZipFile -and -not (Confirm-PcapBeforeNetwork 'fetch the latest Hayabusa rules from GitHub')) { $script:RulesUpdating = $false; return }
-    if ($script:QueueRun -and -not $script:QueueRun.Handle.IsCompleted) {
+    if (Test-QueueReadsRules) {
         $script:RulesUpdating = $false
-        [void][System.Windows.MessageBox]::Show('A queued job is running. Update the rules when it has finished, or Cancel it in the queue first.', 'Hayabusa rules'); return
+        [void][System.Windows.MessageBox]::Show('A queued job is scanning or converting. Update the rules when that step has finished, or Cancel it in the queue first.', 'Hayabusa rules'); return
     }
+    if (-not $ZipFile -and -not (Confirm-PcapBeforeNetwork 'fetch the latest Hayabusa rules from GitHub')) { $script:RulesUpdating = $false; return }
     Set-AppBusy $true 'updating the Hayabusa rules'
     Start-UiJob 'Update Hayabusa rules'
     $result = 'FAILED'; $detail = ''
@@ -481,9 +483,9 @@ $btnRulesRestore.Add_Click({
     if ($script:Busy) { return }
     if ([System.Windows.MessageBox]::Show('Put back the rules from before the last update? The current ones become the backup, so this can be undone.', 'Hayabusa rules', 'YesNo') -ne 'Yes') { return }
     $script:RulesUpdating = $true
-    if ($script:QueueRun -and -not $script:QueueRun.Handle.IsCompleted) {
+    if (Test-QueueReadsRules) {
         $script:RulesUpdating = $false
-        [void][System.Windows.MessageBox]::Show('A queued job is running. Restore the rules when it has finished.', 'Hayabusa rules'); return
+        [void][System.Windows.MessageBox]::Show('A queued job is scanning or converting. Restore the rules when that step has finished.', 'Hayabusa rules'); return
     }
     Set-AppBusy $true 'restoring the Hayabusa rules'
     $result = 'FAILED'; $detail = ''

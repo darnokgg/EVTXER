@@ -101,6 +101,28 @@ try {
     New-Rules (Join-Path $deep 'rules') 3
     Assert-Throws { Update-HayabusaRules -HayabusaExe $dexe -ZipFile $good -MinRules 1 } "an update in too deep a folder is refused up front"
     Assert-Equal (Get-RulesInfo (Join-Path $deep 'rules')).Count 3 "and nothing was moved"
+
+    # ---- only a queued scan or conversion holds an update back ----
+    # Any running step used to refuse it, and only after the PCAP question.
+    $qsrc = Get-Content (Join-Path $PSScriptRoot '..\code\wpf-queue.ps1') -Raw
+    $qast = [Management.Automation.Language.Parser]::ParseInput($qsrc, [ref]$null, [ref]$null)
+    $fn = $qast.Find({ param($a) $a -is [Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq 'Test-QueueReadsRules' }, $true)
+    . ([scriptblock]::Create($fn.Extent.Text))
+    function New-Run([string]$Step, [bool]$Done = $false) {
+        [pscustomobject]@{ Handle = [pscustomobject]@{ IsCompleted = $Done }
+                           Job = [pscustomobject]@{ Steps = @('scan', 'ecs', 'upload', 'raw', 'archive'); Step = [array]::IndexOf(@('scan', 'ecs', 'upload', 'raw', 'archive'), $Step) } }
+    }
+    $script:QueueRun = $null;                 Assert-True (-not (Test-QueueReadsRules)) "no queue job: the update goes ahead"
+    $script:QueueRun = New-Run 'scan';        Assert-True (Test-QueueReadsRules)        "a running scan holds it back"
+    $script:QueueRun = New-Run 'ecs';         Assert-True (Test-QueueReadsRules)        "so does a running conversion"
+    $script:QueueRun = New-Run 'upload';      Assert-True (-not (Test-QueueReadsRules)) "an upload does not"
+    $script:QueueRun = New-Run 'raw';         Assert-True (-not (Test-QueueReadsRules)) "nor a raw import"
+    $script:QueueRun = New-Run 'archive';     Assert-True (-not (Test-QueueReadsRules)) "nor an archive"
+    $script:QueueRun = New-Run 'scan' $true;  Assert-True (-not (Test-QueueReadsRules)) "a scan that has finished does not"
+    $script:QueueRun = $null
+    $set = Get-Content (Join-Path $PSScriptRoot '..\code\wpf-settings.ps1') -Raw
+    Assert-True ($set -match "(?s)function Invoke-RulesUpdate.*?Test-QueueReadsRules.*?Confirm-PcapBeforeNetwork 'fetch the latest") "the update asks the queue before the PCAP question"
+    Assert-True ($set -notmatch 'QueueRun\.Handle') "Settings asks the queue, not its handle"
 } finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
 }

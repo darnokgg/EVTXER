@@ -290,6 +290,14 @@ function Get-QueueBlockers {
     return $b
 }
 
+function Test-QueueReadsRules {
+    # Only a scan or a conversion reads the rules. An upload, raw import or
+    # archive can run through a rules update; new scans wait on RulesUpdating.
+    $r = $script:QueueRun
+    if (-not $r -or $r.Handle.IsCompleted) { return $false }
+    return ([string]@($r.Job.Steps)[$r.Job.Step]) -in 'scan', 'ecs'
+}
+
 function Save-QueueLines($Run) {
     $buf = New-Object System.Collections.Generic.List[string]
     $m = $null

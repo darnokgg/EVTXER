@@ -4254,6 +4254,16 @@ function Test-EvtxArchive([string]$ZipPath, [hashtable]$Expected, [hashtable]$Pr
     } finally { $fs.Dispose() }
 }
 
+function Move-FileWithRetry([string]$Path, [string]$Destination, [int]$Tries = 5, [int]$DelayMs = 200) {
+    # An antivirus or sync client can still hold a file it saw being written
+    # for a moment after it closes. A rename that fails then would make the
+    # caller throw away a zip that took minutes to build and verify.
+    for ($i = 1; ; $i++) {
+        try { Move-Item -LiteralPath $Path -Destination $Destination -ErrorAction Stop; return }
+        catch { if ($i -ge $Tries) { throw }; Start-Sleep -Milliseconds $DelayMs }
+    }
+}
+
 function Compress-EvtxFolder {
     # One host folder -> one verified zip in $ArchiveRoot, then the source is
     # deleted. Runs in a background runspace (Start-LibJob); $Progress carries
@@ -4307,7 +4317,7 @@ function Compress-EvtxFolder {
         $Progress.Step = 'verifying'
         $bad = Test-EvtxArchive $part $hashes $Progress
         if ($bad) { throw "verification failed - $bad" }
-        Move-Item -LiteralPath $part -Destination $zip -ErrorAction Stop
+        Move-FileWithRetry $part $zip
     } catch {
         Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
         throw

@@ -171,6 +171,30 @@ try {
     } else {
         Write-Host "  [SKIP] $unc is not reachable (needs admin) - SMB archive not exercised" -ForegroundColor Yellow
     }
+
+    # ---- the rename of the verified zip waits out a scanner ----
+    # An antivirus or sync client holding the new .partial for a moment made
+    # the rename fail, and the catch deleted the verified zip.
+    $held = Join-Path $tmp 'held.zip.partial'; $flag = Join-Path $tmp 'held.flag'
+    Set-Content -LiteralPath $held -Value 'zip'
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript({ param($p, $f)
+        $fs = [IO.File]::Open($p, 'Open', 'Read', 'Read')
+        [IO.File]::WriteAllText($f, 'x'); Start-Sleep -Milliseconds 500; $fs.Dispose() }).AddArgument($held).AddArgument($flag)
+    $h = $ps.BeginInvoke()
+    while (-not (Test-Path -LiteralPath $flag)) { Start-Sleep -Milliseconds 20 }
+    Move-FileWithRetry $held (Join-Path $tmp 'held.zip')
+    [void]$ps.EndInvoke($h); $ps.Dispose()
+    Assert-True (Test-Path -LiteralPath (Join-Path $tmp 'held.zip')) "a file held for half a second is still renamed"
+
+    $fs = [IO.File]::Open((Join-Path $tmp 'held.zip'), 'Open', 'Read', 'Read')
+    try {
+        $threw = $false
+        try { Move-FileWithRetry (Join-Path $tmp 'held.zip') (Join-Path $tmp 'gone.zip') -Tries 2 -DelayMs 10 } catch { $threw = $true }
+        Assert-True $threw "a file that stays held still fails, after the retries"
+    } finally { $fs.Dispose() }
+    $lib = Get-Content -LiteralPath "$PSScriptRoot\..\code\HayabusaLib.ps1" -Raw
+    Assert-True ($lib -match 'Test-EvtxArchive \$part[^\n]*\n[^\n]*\n\s*Move-FileWithRetry \$part \$zip') "the archive renames its verified zip that way"
 } finally {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
