@@ -42,6 +42,12 @@ $c = Get-HayabusaScanArgs -EvtxDir 'C:\e' -OutFile 'C:\o\results.csv' -Format cs
 Assert-Equal ($c[$c.IndexOf('-t') + 1]) 'csv' "the CSV pass asks for csv"
 Assert-True ($c -contains '-q' -and $c -contains '-N') "the CSV pass is quiet and skips the summary"
 Assert-True ($c -notcontains '-H') "the CSV pass writes no second HTML report"
+# Several EVTX folders, one scan (the Convert tab's +): -d once per folder.
+$m = Get-HayabusaScanArgs -EvtxDir @('C:\a', '\\nas\b') -OutFile 'C:\o\results.jsonl'
+Assert-Equal (@($m | Where-Object { $_ -eq '-d' }).Count) 2 "two folders, two -d"
+Assert-Equal (($m[1..4]) -join '|') '-d|C:\a|-d|\\nas\b' "each folder follows its own -d, in order"
+$man = Get-ManualEcsCommand -LibPath 'C:\t\HayabusaLib.ps1' -Source 'C:\o\results.jsonl' -EvtxDir @('C:\a', 'C:\b')
+Assert-True ($man -match "-EvtxDir 'C:\\a', 'C:\\b'") "the manual ECS command lists every folder"
 
 # ---- Takajo in a console keeps its progress bar ----
 $t = Get-TakajoArgs -Command automagic -TakajoDir 'C:\t' -Timeline 'C:\r.jsonl' -OutDir 'C:\o' -ShowProgress

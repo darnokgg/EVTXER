@@ -43,23 +43,30 @@ $convertXaml = @'
             <ColumnDefinition Width="150"/>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="Auto"/>
           </Grid.ColumnDefinitions>
           <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
           </Grid.RowDefinitions>
 
           <TextBlock Grid.Row="0" Grid.Column="0" Text="EVTX folder *" Margin="0,0,8,0"
-                     ToolTip="Any local folder or share. Type or paste the path (quotes are fine), or Browse. A mapped drive letter is turned into its \\server\share path, because EVTXER runs as administrator and Windows hides your mapped drives from it."/>
+                     ToolTip="Any local folder or share. Type or paste the path (quotes are fine), or Browse. + adds more folders (Ctrl-click several in its picker); all of them are scanned together into one result. A mapped drive letter is turned into its \\server\share path, because EVTXER runs as administrator and Windows hides your mapped drives from it."/>
           <TextBox   Grid.Row="0" Grid.Column="1" x:Name="txtEvtx" Margin="0,3"/>
           <Button    Grid.Row="0" Grid.Column="2" x:Name="btnEvtx" Content="Browse..." Margin="8,3,0,3"/>
+          <!-- More folders, one scan (owner, 2026-10-27): Hayabusa takes -d
+               once per folder. Rows are added here by Add-EvtxFolderRow. -->
+          <Button    Grid.Row="0" Grid.Column="3" x:Name="btnAddEvtx" Content="+" MinWidth="34" FontWeight="Bold" Margin="6,3,0,3"
+                     ToolTip="Add another EVTX folder - every folder listed is scanned together, into one result."/>
+          <StackPanel Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" x:Name="pnlMoreEvtx"/>
 
-          <TextBlock Grid.Row="1" Grid.Column="0" Text="Hayabusa binary *" Margin="0,0,8,0"/>
-          <TextBox   Grid.Row="1" Grid.Column="1" x:Name="txtExe" Margin="0,3"/>
-          <Button    Grid.Row="1" Grid.Column="2" x:Name="btnExe" Content="Browse..." Margin="8,3,0,3"/>
+          <TextBlock Grid.Row="2" Grid.Column="0" Text="Hayabusa binary *" Margin="0,0,8,0"/>
+          <TextBox   Grid.Row="2" Grid.Column="1" x:Name="txtExe" Margin="0,3"/>
+          <Button    Grid.Row="2" Grid.Column="2" x:Name="btnExe" Content="Browse..." Margin="8,3,0,3"/>
 
-          <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="lblExe"
+          <TextBlock Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2" x:Name="lblExe"
                      Style="{StaticResource Hint}" MinHeight="18" Margin="0,2,0,0" Text=""/>
         </Grid>
 
@@ -139,7 +146,7 @@ $tabConvert.Content = $convertRoot
 # called on the PARSED FRAGMENT ROOT, not on $win: a fragment loaded separately
 # is not in the window's name scope, so $win.FindName() returns $null for all of
 # these.
-foreach ($name in @('txtEvtx','txtExe','txtSrc','btnEvtx','btnExe','btnBrowse',
+foreach ($name in @('txtEvtx','txtExe','txtSrc','btnEvtx','btnExe','btnBrowse','btnAddEvtx','pnlMoreEvtx',
                     'btnConvert','btnConvertCmd','chkCsv','rbEvtx','rbJsonl',
                     'lblExe','lblFile','lblConv','lblPaths')) {
     Set-Variable -Name $name -Scope Script -Value $convertRoot.FindName($name)
@@ -215,7 +222,7 @@ $btnBrowse.Add_Click({
 function Update-Mode {
     # IsChecked is nullable<bool> in WPF, so it is compared rather than trusted.
     $evtx = ($rbEvtx.IsChecked -eq $true)
-    foreach ($c in @($txtEvtx, $btnEvtx, $txtExe, $btnExe)) { $c.IsEnabled = $evtx }
+    foreach ($c in @($txtEvtx, $btnEvtx, $btnAddEvtx, $pnlMoreEvtx, $txtExe, $btnExe)) { $c.IsEnabled = $evtx }
     foreach ($c in @($txtSrc, $btnBrowse))                   { $c.IsEnabled = -not $evtx }
     $btnConvert.Content = if ($evtx) { 'SCAN + CONVERT' } else { 'CONVERT' }
     if ($evtx) { Update-ExeState } else { $lblExe.Text = '' }
@@ -251,12 +258,13 @@ function Invoke-HayabusaScan {
     # timestamps. Runs through Invoke-ExternalTool, so the window stays alive
     # through a scan that prints nothing until it is done.
     $exe  = $txtExe.Text.Trim()
-    $evtx = $txtEvtx.Text.Trim()
+    $evtx = @(Get-ConvertEvtxFolders)
     $out  = Get-ScanOutputPath $script:Root
     New-ParentDirectory $out
     $html = Join-Path (Split-Path -Parent $out) 'results-summary.html'
     $files = @(Get-ChildItem -LiteralPath $evtx -Recurse -Filter *.evtx -File -ErrorAction SilentlyContinue)
     $detail = '{0} EVTX file(s), {1:N0} MB' -f $files.Count, (($files | Measure-Object Length -Sum).Sum / 1MB)
+    if ($evtx.Count -gt 1) { $detail += ", from $($evtx.Count) folders" }
 
     $scanArgs = Get-HayabusaScanArgs -EvtxDir $evtx -OutFile $out -HtmlReport $html
     Write-Log "`n$('=' * 70)`nSCANNING with Hayabusa - $detail`n$exe $($scanArgs -join ' ')`n$('=' * 70)`n" 'info'
@@ -332,14 +340,81 @@ $btnEvtx.Add_Click({
     if ($p) { [void](Set-EvtxFolder $p -Quiet) }
 })
 
+# ---- more than one EVTX folder (owner, 2026-10-27: "a plus button to add a
+# second evtx folder location") - all scanned together into one result ----
+function Get-ConvertEvtxFolders {
+    # The first box, then every added row, as typed (quotes and a mapped drive
+    # this elevated window cannot see are dealt with); blanks dropped, each
+    # folder once.
+    $boxes = @($txtEvtx) + @($pnlMoreEvtx.Children | ForEach-Object { $_.Children[0] })
+    $seen = @{}
+    foreach ($b in $boxes) {
+        $b.Text = Resolve-TypedPath $b.Text
+        $t = $b.Text.Trim()
+        if ($t -and -not $seen.ContainsKey($t.ToLowerInvariant())) { $seen[$t.ToLowerInvariant()] = 1; $t }
+    }
+}
+
+function Add-EvtxFolderRow([string]$Path) {
+    # TextBox | Browse... | - . No .GetNewClosure(): each button finds its row
+    # through Tag.
+    $row = New-Object System.Windows.Controls.Grid
+    $row.Margin = '0,0,0,0'
+    foreach ($w in '*', 'Auto', 'Auto') {
+        $cd = New-Object System.Windows.Controls.ColumnDefinition
+        $cd.Width = (New-Object System.Windows.GridLengthConverter).ConvertFromString($w)
+        $row.ColumnDefinitions.Add($cd)
+    }
+    $box = New-Object System.Windows.Controls.TextBox
+    $box.Margin = '0,3'; $box.Text = $Path
+    $browse = New-Object System.Windows.Controls.Button
+    $browse.Content = 'Browse...'; $browse.Margin = '8,3,0,3'; $browse.Tag = $box
+    [System.Windows.Controls.Grid]::SetColumn($browse, 1)
+    $remove = New-Object System.Windows.Controls.Button
+    $remove.Content = [string][char]0x2212; $remove.MinWidth = 34; $remove.FontWeight = 'Bold'
+    $remove.Margin = '6,3,0,3'; $remove.Tag = $row; $remove.ToolTip = 'Remove this folder from the scan'
+    [System.Windows.Controls.Grid]::SetColumn($remove, 2)
+    $browse.Add_Click({
+        param($s)
+        $p = Select-FolderPath 'Another folder containing .evtx files' $(if ($s.Tag.Text.Trim()) { $s.Tag.Text } else { $script:Folders.Evtx })
+        if ($p) { $s.Tag.Text = $p; Update-EvtxCount }
+    })
+    $remove.Add_Click({ param($s) $pnlMoreEvtx.Children.Remove($s.Tag); Update-EvtxCount })
+    $box.Add_LostFocus({ Update-EvtxCount })
+    [void]$row.Children.Add($box); [void]$row.Children.Add($browse); [void]$row.Children.Add($remove)
+    [void]$pnlMoreEvtx.Children.Add($row)
+    return $box
+}
+
+function Update-EvtxCount {
+    # The count under the folders covers every folder listed.
+    $dirs = @(Get-ConvertEvtxFolders | Where-Object { Test-Path -LiteralPath $_ })
+    if (-not $dirs.Count) { return }
+    $n = @(Get-ChildItem -LiteralPath $dirs -Recurse -Filter *.evtx -File -ErrorAction SilentlyContinue).Count
+    $where = if ($dirs.Count -gt 1) { "under these $($dirs.Count) folders" } else { 'under this folder' }
+    if ($n -gt 0) { $lblConv.Text = "$n .evtx file(s) found $where."; $lblConv.Foreground = $script:ConvBrush.Ok }
+    else { $lblConv.Text = "No .evtx files found $where."; $lblConv.Foreground = $script:ConvBrush.Err }
+}
+
+$btnAddEvtx.Add_Click({
+    $p = Select-FolderPath 'Another folder containing .evtx files - Ctrl-click to pick several' $script:Folders.Evtx -Multiple
+    if (-not $p) { return }
+    foreach ($d in $p) { [void](Add-EvtxFolderRow $d) }
+    Update-EvtxCount
+})
+
 $btnConvert.Add_Click({
     if ($script:Busy) { return }
     # Pasted with quotes, or a mapped drive this elevated window cannot see.
-    $txtEvtx.Text = Resolve-TypedPath $txtEvtx.Text
     $txtSrc.Text  = Resolve-TypedPath $txtSrc.Text
+    $evtxDirs = @(Get-ConvertEvtxFolders)
     if ($rbEvtx.IsChecked -eq $true) {
-        if (-not (Test-Path $txtEvtx.Text)) {
+        if (-not $evtxDirs.Count) {
             [void][System.Windows.MessageBox]::Show('Choose the folder containing your .evtx files.', 'No folder'); return
+        }
+        $missing = @($evtxDirs | Where-Object { -not (Test-Path -LiteralPath $_) })
+        if ($missing.Count) {
+            [void][System.Windows.MessageBox]::Show("Not found:`n`n$($missing -join "`n")", 'No folder'); return
         }
         if (-not (Test-Path $txtExe.Text)) {
             [void][System.Windows.MessageBox]::Show(
@@ -353,7 +428,7 @@ $btnConvert.Add_Click({
     # Read once: the radios are locked while busy, but the record should not
     # depend on that.
     $fromEvtx = ($rbEvtx.IsChecked -eq $true)
-    $convTarget = if ($fromEvtx) { $txtEvtx.Text.Trim() } else { $txtSrc.Text.Trim() }
+    $convTarget = if ($fromEvtx) { $evtxDirs -join '; ' } else { $txtSrc.Text.Trim() }
     Set-AppBusy $true $(if ($fromEvtx) { 'Hayabusa scan + convert' } else { 'ECS convert' })
     Start-UiJob $(if ($fromEvtx) { 'Hayabusa scan and convert' } else { 'ECS convert' })
     $convClock = [Diagnostics.Stopwatch]::StartNew()
@@ -389,7 +464,7 @@ $btnConvert.Add_Click({
         # The same function the manual command runs, so the two cannot differ.
         # The scanned folder holds the collections' manifests, whose footprints
         # mark our own activity. A JSONL from elsewhere simply matches none.
-        $evtxDir = if ($rbEvtx.IsChecked -eq $true) { $txtEvtx.Text.Trim() } else { $script:Folders.Evtx }
+        $evtxDir = if ($rbEvtx.IsChecked -eq $true) { $evtxDirs } else { $script:Folders.Evtx }
         $conv = Convert-HayabusaJsonlToEcs -Source $txtSrc.Text -Destination $out -ImportId $script:ImportId `
                     -EvtxDir $evtxDir -OnProgress {
             param($done, $all)
@@ -455,11 +530,12 @@ $btnConvert.Add_Click({
 
 $btnConvertCmd.Add_Click({
     $out  = Get-ScanOutputPath $script:Root
-    $scan = Get-ManualHayabusaCommand -Exe $txtExe.Text.Trim() -EvtxDir $txtEvtx.Text.Trim() -OutFile $out `
+    $dirs = @(Get-ConvertEvtxFolders)
+    $scan = Get-ManualHayabusaCommand -Exe $txtExe.Text.Trim() -EvtxDir $dirs -OutFile $out `
                 -HtmlReport (Join-Path (Split-Path -Parent $out) 'results-summary.html') -Csv:($chkCsv.IsChecked -eq $true)
     $src  = if ($rbJsonl.IsChecked -eq $true -and $txtSrc.Text.Trim()) { $txtSrc.Text.Trim() } else { $out }
     $ecs  = Get-ManualEcsCommand -LibPath (Join-Path $script:AppRoot 'HayabusaLib.ps1') -Source $src `
-                -EvtxDir $(if ($rbEvtx.IsChecked -eq $true -and $txtEvtx.Text.Trim()) { $txtEvtx.Text.Trim() } else { $script:Folders.Evtx })
+                -EvtxDir $(if ($rbEvtx.IsChecked -eq $true -and $dirs.Count) { $dirs } else { $script:Folders.Evtx })
     $text = if ($rbEvtx.IsChecked -eq $true) { "$scan`r`n`r`n$ecs" } else { $ecs }
     Show-CommandWindow 'Manual scan and conversion' `
         'What SCAN + CONVERT does, as PowerShell: the Hayabusa scan, then the ECS conversion the Upload tab needs.' $text

@@ -3026,7 +3026,10 @@ function Get-HayabusaScanArgs {
     # timestamps Elasticsearch will not parse) or -w (an interactive prompt that
     # blocks forever). The Show Command popup and the README use this too.
     param(
-        [string]$EvtxDir,
+        # One folder or several: Hayabusa takes -d once per folder and scans
+        # them all in one run (measured: two folders gave exactly the sum of
+        # their own scans, 23,828 = 18,419 + 5,409).
+        [string[]]$EvtxDir,
         [string]$OutFile,
         [ValidateSet('JSONL', 'csv')]
         [string]$Format = 'JSONL',
@@ -3036,8 +3039,9 @@ function Get-HayabusaScanArgs {
         # and summary were just printed by the first.
         [switch]$Quiet
     )
-    $a = @('dfir-timeline', '-d', $EvtxDir, '-o', $OutFile, '-t', $Format,
-           '-p', 'super-verbose', '-w', '-O', '-b', '-C')
+    $a = @('dfir-timeline')
+    foreach ($d in @($EvtxDir)) { $a += @('-d', $d) }
+    $a += @('-o', $OutFile, '-t', $Format, '-p', 'super-verbose', '-w', '-O', '-b', '-C')
     if ($HtmlReport) { $a += @('-H', $HtmlReport) }
     if ($Quiet)      { $a += @('-q', '-N') }
     return ,$a
@@ -3374,7 +3378,7 @@ function Start-EcsWorker {
     # rewritten about every 100 ms), <part>.done (its counts, as JSON) or
     # <part>.err (why it failed). It rebuilds the footprints and the Details
     # name map itself rather than receiving them - both take well under a second.
-    param([string]$Source, [string]$PartPath, [string]$ImportId, [string]$EvtxDir, [string]$HayabusaDir,
+    param([string]$Source, [string]$PartPath, [string]$ImportId, [string[]]$EvtxDir, [string]$HayabusaDir,
           [long]$Offset, [long]$Skip, [long]$Take)
     $lit = { param($v) ConvertTo-PsLiteral ([string]$v) }
     $script = @(
@@ -3382,7 +3386,7 @@ function Start-EcsWorker {
         "    . $(& $lit $script:HayabusaLibPath)"
         # The version stamp (agent.version): only the launcher defines it.
         "    `$script:ToolVersion = $(& $lit $script:ToolVersion)"
-        "    `$fp = @(Get-CollectionFootprints $(& $lit $EvtxDir))"
+        "    `$fp = @(Get-CollectionFootprints @($((@($EvtxDir) | ForEach-Object { & $lit $_ }) -join ', ')))"
         "    `$al = Get-DetailsAliasMap $(& $lit $HayabusaDir)"
         "    `$r = Convert-EcsRange -Source $(& $lit $Source) -Destination $(& $lit $PartPath) -ImportId $(& $lit $ImportId) ``"
         "            -Footprints `$fp -Aliases `$al -Offset $Offset -Skip $Skip -Take $Take -OnTick {"
@@ -3416,9 +3420,10 @@ function Convert-HayabusaJsonlToEcs {
         # Called about every 100 ms with ($done, $total). Returning $true
         # cancels, and the partial file is removed.
         [scriptblock]$OnProgress,
-        # Where the scanned EVTX came from. Its manifests' footprints decide
-        # which detections are our own collection - see Test-CollectionNoise.
-        [string]$EvtxDir,
+        # Where the scanned EVTX came from (one folder or several). Their
+        # manifests' footprints decide which detections are our own
+        # collection - see Test-CollectionNoise.
+        [string[]]$EvtxDir,
         # 0 = Get-EcsWorkerCount decides.
         [int]$Workers = 0,
         # Whose rules/ and rules\config\default_details.txt name the Details
@@ -3864,10 +3869,12 @@ function Get-ManualCollectCommand {
 }
 
 function Get-ManualHayabusaCommand {
-    param([string]$Exe, [string]$EvtxDir, [string]$OutFile, [string]$HtmlReport, [switch]$Csv)
+    param([string]$Exe, [string[]]$EvtxDir, [string]$OutFile, [string]$HtmlReport, [switch]$Csv)
     $exePath = if ($Exe) { $Exe } else { '<HAYABUSA EXE>' }
     $dir     = Split-Path -Parent $exePath
-    $a = Get-HayabusaScanArgs -EvtxDir $(if ($EvtxDir) { $EvtxDir } else { '<EVTX FOLDER>' }) -OutFile $OutFile -HtmlReport $HtmlReport
+    $EvtxDir = @(@($EvtxDir) | Where-Object { $_ })
+    if (-not $EvtxDir.Count) { $EvtxDir = @('<EVTX FOLDER>') }
+    $a = Get-HayabusaScanArgs -EvtxDir $EvtxDir -OutFile $OutFile -HtmlReport $HtmlReport
     $lines = @(
         '# Manual Hayabusa scan - exactly what SCAN + CONVERT runs first.'
         '# Hayabusa finds its rules folder from the current folder, so run it from its own.'
@@ -3876,7 +3883,7 @@ function Get-ManualHayabusaCommand {
     )
     if ($Csv) {
         $csvOut = Join-Path (Split-Path -Parent $OutFile) 'results.csv'
-        $c = Get-HayabusaScanArgs -EvtxDir $(if ($EvtxDir) { $EvtxDir } else { '<EVTX FOLDER>' }) -OutFile $csvOut -Format csv -Quiet
+        $c = Get-HayabusaScanArgs -EvtxDir $EvtxDir -OutFile $csvOut -Format csv -Quiet
         $lines += @('', '# Optional CSV copy for reading in Excel (not used for the upload).',
                     ("& $(ConvertTo-PsLiteral $exePath) " + ((@($c) | ForEach-Object { Format-PsArgument $_ }) -join ' ')))
     }
@@ -3884,7 +3891,8 @@ function Get-ManualHayabusaCommand {
 }
 
 function Get-ManualEcsCommand {
-    param([string]$LibPath, [string]$Source, [string]$EvtxDir)
+    param([string]$LibPath, [string]$Source, [string[]]$EvtxDir)
+    $EvtxDir = @(@($EvtxDir) | Where-Object { $_ })
     $src = if ($Source) { $Source } else { '<results.jsonl>' }
     # Same naming as Get-EcsOutputPath, done as text: that one goes through
     # [IO.Path], which rejects the <placeholder> an empty field turns into.
@@ -3898,7 +3906,7 @@ function Get-ManualEcsCommand {
         # The version stamp (agent.version) - a fresh console has none.
         "`$script:ToolVersion = $(ConvertTo-PsLiteral "$script:ToolVersion")"
         ("Convert-HayabusaJsonlToEcs -Source $(ConvertTo-PsLiteral $src) -Destination $(ConvertTo-PsLiteral $dst)" +
-            $(if ($EvtxDir) { " -EvtxDir $(ConvertTo-PsLiteral $EvtxDir)" } else { '' }))
+            $(if ($EvtxDir.Count) { " -EvtxDir " + ((@($EvtxDir) | ForEach-Object { ConvertTo-PsLiteral $_ }) -join ', ') } else { '' }))
     ) -join "`r`n")
 }
 
@@ -3982,12 +3990,15 @@ function ConvertTo-UtcDate($Value) {
                              [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal)
 }
 
-function Get-CollectionFootprints([string]$EvtxDir) {
-    # Every manifest.json under the scanned folder that carries a footprint.
+function Get-CollectionFootprints([string[]]$EvtxDir) {
+    # Every manifest.json under the scanned folder(s) that carries a footprint.
     # The folder it sits in is the collection folder: a detection belongs to
     # it when Hayabusa's EvtxFile is inside that folder.
-    if (-not $EvtxDir -or -not (Test-Path -LiteralPath $EvtxDir)) { return @() }
-    $found = foreach ($m in Get-ChildItem -LiteralPath $EvtxDir -Recurse -Filter 'manifest.json' -File -ErrorAction SilentlyContinue) {
+    $dirs = @(@($EvtxDir) | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+    if (-not $dirs.Count) { return @() }
+    # Each manifest once, also when a folder and its parent are both listed.
+    $found = foreach ($m in (Get-ChildItem -LiteralPath $dirs -Recurse -Filter 'manifest.json' -File -ErrorAction SilentlyContinue |
+                             Sort-Object FullName -Unique)) {
         try {
             $j = Get-Content -LiteralPath $m.FullName -Raw | ConvertFrom-Json
             if (-not $j.Footprint) { continue }

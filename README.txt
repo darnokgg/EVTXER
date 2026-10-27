@@ -65,7 +65,9 @@ THE EIGHT TABS
                             Lands in evtx\<hostname>_<timestamp>\
 
 2. Convert                  Scan those logs with Hayabusa. Writes two files -
-                            see below.
+                            see below. + beside Browse adds more EVTX folders
+                            (Ctrl-click several); all are scanned together
+                            into one result, - takes one away.
 
 3. Upload                   Ship the detections to an Elasticsearch index.
 

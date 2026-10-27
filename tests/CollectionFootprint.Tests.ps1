@@ -55,6 +55,11 @@ $all = @(Get-CollectionFootprints (Join-Path $scratch 'evtx'))
 Assert-True (-not (Test-CollectionNoise (New-Det (Join-Path $smbDir 'PS.evtx') '2026-10-12T10:02:00Z' @{ Data = 'wsmprovhost.exe' }) $all)) `
     "an SMB visit does not claim a WinRM session in its window"
 Assert-Equal @(Get-CollectionFootprints (Join-Path $scratch 'nothing-here')).Count 0 "no footprints means an empty list, not one null"
+# Several scanned folders (the Convert tab's +, 2026-10-27): every one's
+# manifests count; a missing one is ignored.
+$several = @(Get-CollectionFootprints @($smbDir, (Join-Path $scratch 'nothing-here')))
+Assert-Equal $several.Count 1 "with several folders, each one's manifests are read and a missing folder is skipped"
+Assert-Equal @(Get-CollectionFootprints @((Join-Path $scratch 'evtx'), $smbDir)).Count $all.Count "a folder listed twice (itself and a parent) is not counted twice"
 
 # The clock skew is the target's word. A huge one is not believed: it would
 # slide the window onto other activity and tag it as ours.
