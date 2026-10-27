@@ -116,6 +116,19 @@
             }
           }
         },
+        "agent": {
+          "properties": {
+            "name": {
+              "type": "keyword"
+            },
+            "type": {
+              "type": "keyword"
+            },
+            "version": {
+              "type": "keyword"
+            }
+          }
+        },
         "import": {
           "properties": {
             "id": {

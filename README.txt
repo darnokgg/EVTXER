@@ -43,7 +43,7 @@ command line - that needs the machine's admin, not this tool.
 Requires Windows x64 and PowerShell 5.1 (built into Windows 10/11).
 
 
-THE SEVEN TABS
+THE EIGHT TABS
 --------------
 
 1. Collect EVTX             Pull .evtx from remote hosts over SMB or WinRM
@@ -71,6 +71,14 @@ THE SEVEN TABS
                             PCAP) and ARCHIVE (see ARCHIVE). Then SETUP, set
                             once per machine: the EVTX drop folder and the
                             Hayabusa rules.
+
+8. Guide                    A cheat sheet: a short answer to each thing that
+                            is not obvious (times in Security Onion, from a
+                            detection to the full log, where data lands,
+                            duplicates, what Archive deletes, passwords...).
+                            Its search box searches the cheat sheet AND this
+                            whole README; its More button opens the chapter.
+                            Usable while a job runs.
 
 THE TOP BAR shows at a glance whether the mission is ready. Click a pill to
 open the tab that fixes it:
@@ -370,6 +378,7 @@ into PowerShell. For the collection, open it with "Run as administrator".
     # Manual ECS conversion - the same function the Convert tab runs.
     # Start PowerShell with:   powershell -ExecutionPolicy Bypass
     . 'C:\EVTXER\code\HayabusaLib.ps1'
+    $script:ToolVersion = 'NN'   # NN = the number in EVTXER's title bar - stamps agent.version
     Convert-HayabusaJsonlToEcs -Source 'C:\EVTXER\output\hayabusa\results.jsonl' -Destination 'C:\EVTXER\output\hayabusa\results.ecs.jsonl'
 
 4. Takajo:
@@ -441,6 +450,14 @@ THINGS WORTH KNOWING
   (C:\Windows\Temp\EVTX_Export_<8 hex>): delete it by hand, or the next WinRM
   collection from that host removes it once it is a day old.
 
+- Every detection EVTXER converts says which EVTXER made it and when:
+  agent.version (the EVTXER version) and event.ingested (when it was
+  converted). A conversion typed by hand (MANUAL PROCEDURES) needs its
+  $script:ToolVersion line for that - Show command writes it. In Kibana,
+  agent.version : 72 shows only what v72 converted - handy when one index
+  holds uploads from several versions. The version is not part of the
+  detection's id, so a newer EVTXER does not duplicate old detections.
+
 - Nothing is uploaded twice. Every detection carries a fixed id
   (event.id), and Elasticsearch refuses one it already holds. So: a host
   pulled again two weeks later adds only its NEW detections (the old ones
@@ -460,7 +477,7 @@ THINGS WORTH KNOWING
   by an older version also adds the newer field mappings to it (needs the
   'manage' right on the index; the log says if it was refused).
 
-- The ECS conversion uses one worker per CPU core (up to 8), and the upload
+- The ECS conversion uses every CPU core but one (up to 16), and the upload
   reads the file as it sends it, so a batch of half a million detections
   needs no more memory than a small one. More cores on the VM = faster
   conversion; more RAM does not matter for it.
@@ -807,6 +824,13 @@ runs it for you:
     event.created column.
   - A file already imported is skipped - Security Onion names each import
     after the file's MD5 - so sending the same logs twice adds nothing.
+  - DISK: each import reads the manager's free space once, on the call that
+    stages the files (df of /tmp and /nsm - nothing is polled), and warns
+    "LOW DISK on the manager" when /tmp cannot hold the files or /nsm would
+    pass 85% full (Security Onion keeps a copy of the files and indexes
+    every event - about 3x the EVTX, a rough rule; Elasticsearch refuses new
+    data at 95%). A warning only: the import still runs. Before a big run,
+    check on the manager:  df -h /tmp /nsm
   - The password is never on a command line, never in the
     log: PuTTY's plink/pscp (code\putty) read it from a temporary file only
     your Windows account can read, deleted straight after.
@@ -851,6 +875,58 @@ Security Onion only for the raw side - a plain Elastic stack has no raw
 events.
 
 
+FINDING THINGS: TIME, PIVOTS, WHERE DATA LANDS
+----------------------------------------------
+
+Where each kind of data goes:
+
+  Detections (Upload tab, queue's Upload)
+      Into the mission's own index, hayabusa-mission-<mission name>. Seen
+      in KIBANA only: Discover (data view "Hayabusa EVTX detections") and the Hayabusa
+      dashboards. NOT in Security Onion's Hunt or Alerts - those search
+      Security Onion's own indices, and a separate index can be dropped
+      cleanly. Same on a plain Elastic stack.
+  Raw events (Raw Events tab, queue's Raw import to SO)
+      Into Security Onion's own logs-import-so data stream. Seen in
+      Security Onion's Hunt and Dashboards, and in Kibana's Raw Events
+      dashboards. Security Onion only.
+
+Detections are not the whole log. Hayabusa sends only what a rule matched:
+the matched events, with the fields Hayabusa extracts (winlog.event_data.*,
+hayabusa.details). The full event - and every event no rule matched - is
+only in the raw import.
+
+TIME. A detection's @timestamp is when the event happened on the machine,
+in UTC (Kibana shows it in the browser's time zone). Raw events are
+different: Security Onion 2.4 files an import under the time of the
+IMPORT, so their @timestamp is when you imported them, and the event's own
+time is in event.created (checked on Security Onion 2.4.211).
+  - In Security Onion's Hunt / Dashboards: set the time range to cover the
+    import (today, if you imported today), add the event.created column
+    and sort by it.
+  - In Kibana: the Raw Events dashboards, or Discover with the data view
+    "Raw Windows events (Security Onion)". Its time field is event.created,
+    so the time picker and every chart follow when things really happened.
+
+FROM A DETECTION TO THE FULL LOG (the pivot). Three fields name one event:
+the machine, the log and the record number. From the detection take
+
+    host.name   winlog.channel   winlog.record_id
+
+and search the raw events (Hunt, or Kibana Discover with the data view
+"Raw Windows events (Security Onion)") for
+
+    winlog.computer_name:"WS01" AND winlog.channel:"Security" AND winlog.record_id:12345
+
+AND in capitals: Security Onion's search reads a lower-case "and" as a word
+to find, and finds nothing. The values are case-sensitive: type them
+exactly as the detection shows them. The host links (HOST LINKS above) do the machine part for you.
+
+WHICH VERSION, WHEN. Every detection EVTXER converts carries agent.version
+(the EVTXER that converted it, from v72) and event.ingested (when). agent.version : 72 in
+Kibana shows only what v72 converted.
+
+
 SECURITY ONION: LETTING EVTXER IN
 ---------------------------------
 
@@ -860,19 +936,45 @@ Security Onion's firewall only lets listed machines reach it. EVTXER needs:
   Kibana Dashboards     port 443  (the web interface - analysts usually have it)
   Raw Events (SO) tab   port 22   (SSH - open to anywhere by default)
 
-On the Security Onion manager, an administrator runs (EVTXER machine's IP):
+USUALLY NOTHING TO DO. If uploads from this machine have worked before, or
+VERIFY CONNECTIVITY on the Upload tab succeeds, this machine is already let
+through - skip the firewall step. It is needed only when VERIFY CONNECTIVITY
+says "Nothing answered at <manager>:9200" (or the Kibana tab cannot reach
+443) although the host and port are right. That message then names this
+machine's IP address and prints the exact command, filled in, to hand to the
+Security Onion administrator:
+
+    Nothing answered at so-manager:9200. ... this PC's address is 10.1.2.3.
+    Ask its administrator to run on the manager:
+        sudo so-firewall --apply includehost elasticsearch_rest 10.1.2.3
+
+THE FIREWALL STEP (only then). On the Security Onion manager, an
+administrator runs, with the EVTXER machine's IP address:
 
     sudo so-firewall --apply includehost elasticsearch_rest <EVTXER IP>
     sudo so-firewall --apply includehost analyst <EVTXER IP>
 
-(The groups are Security Onion 2.4's own: elasticsearch_rest opens 9200,
-analyst opens the web interface. Checked on 2.4.211, 2026-10-16.)
+The first lets it reach Elasticsearch (9200, uploads); the second the web
+interface (443, dashboards) - skip that one if a browser on this machine
+already opens SOC. Nothing else in Security Onion changes. (The groups are
+Security Onion 2.4's own. Checked on 2.4.211, 2026-10-16.)
 
 The account: Security Onion copies its web-interface (SOC) users into
 Elasticsearch, so the Upload tab logs in with a SOC user's email and
 password. It must be allowed to create the hayabusa-* index - tested with a
 SOC administrator; a plain analyst account was not tested. The Kibana
 Dashboards tab uses the same account.
+
+SINGLE SIGN-ON (SSO). EVTXER logs in with a username and password. An
+account that signs in only through SSO may have no Security Onion password
+(not yet tested against an SSO Security Onion). If the login is refused:
+  - Uploads: use an API key (below) - make it in Kibana, signed in through
+    SSO, and leave Username empty on the Upload tab.
+  - Dashboards: import them by hand - in Kibana (signed in through SSO),
+    Stack Management > Saved Objects > Import, the file
+    kibana dashboards\hayabusa-kibana-objects.ndjson (see IMPORT.txt there).
+  - Raw imports are not affected: they use an SSH account on the manager.
+  - Or ask the administrator for a local (non-SSO) account for EVTXER.
 
 SAFER: AN API KEY THAT CAN ONLY TOUCH hayabusa-* INDEXES. A SOC
 administrator's password can write to every index in Security Onion. A key

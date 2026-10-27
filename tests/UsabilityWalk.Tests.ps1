@@ -39,6 +39,23 @@ Assert-True ($h -match '^Nothing answered at 127\.0\.0\.1:9200' -and $h -match '
 Assert-True ($h -notmatch 'EndConnect') "without the .NET wrapper"
 Assert-True ((Get-ConnectionHint 'Unable to connect to the remote server' 'so1' 9200) -match '^Nothing answered at so1:9200') "and so does 'Unable to connect'"
 Assert-Equal (Get-ConnectionHint 'HTTP 403 forbidden' 'so1' 9200) 'HTTP 403 forbidden' "any other error is passed on"
+# Owner, 2026-10-26: when nothing answers, print what the Security Onion
+# administrator needs to let this PC in - its address and the exact command.
+$h = Get-ConnectionHint 'Unable to connect to the remote server' 'so1' 9200 -LocalIp '192.0.2.10'
+Assert-True ($h -match "this PC's address is 192\.0\.2\.10") "it names this PC's address"
+Assert-True ($h.Contains('sudo so-firewall --apply includehost elasticsearch_rest 192.0.2.10')) "and the exact command for 9200, address filled in"
+# Review, 2026-10-26: the plain-Elastic team uses 9200 too, where so-firewall does not exist.
+Assert-True ($h -match 'If they are right and this is Security Onion' -and $h -match 'plain Elastic stack') "the Security Onion command is offered as such, with what to check on a plain Elastic stack"
+Assert-True ($h -notmatch "
+ [^ ]") "no stray space after the command's line break (the command itself is indented by four)"
+$h = Get-ConnectionHint 'Unable to connect to the remote server' 'so1' 443 -LocalIp '192.0.2.10'
+Assert-True ($h.Contains('sudo so-firewall --apply includehost analyst 192.0.2.10')) "443 (the Kibana tab) gets the analyst group"
+$h = Get-ConnectionHint 'Unable to connect to the remote server' 'so1' 9200 -LocalIp ''
+Assert-True ($h.Contains('includehost elasticsearch_rest <this PC') -and $h -match 'ipconfig') "an address that cannot be found is a placeholder, with where to look"
+$h = Get-ConnectionHint 'The remote name could not be resolved: so1' 'so1' 9200 -LocalIp '192.0.2.10'
+Assert-True ($h -notmatch 'so-firewall' -and $h -match 'name') "a name that does not resolve is not a firewall problem - no command"
+Assert-Equal (Get-LocalAddressFor '127.0.0.1' 9200) '127.0.0.1' "this PC's address on the way to a host - nothing is sent"
+Assert-True ((Get-ConnectionHint 'Unable to connect to the remote server' '127.0.0.1' 9200).Contains('includehost elasticsearch_rest 127.0.0.1')) "called as the tabs call it - no address given - it looks the address up itself"
 foreach ($f in 'wpf-upload.ps1', 'wpf-kibana.ps1') {
     Assert-True ($src[$f] -match 'Get-ConnectionHint' -and $src[$f] -match "New-LedgerRow -Action 'Certificate fetch'") "$f explains fetch failures and records every fetch (U-12)"
 }

@@ -466,6 +466,10 @@ function ConvertTo-EcsDocument($Doc, [string]$ImportId, [hashtable]$Aliases) {
             ingested = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
         }
         import   = [ordered]@{ id = $ImportId }
+        # Which EVTXER made it (owner, 2026-10-26: tell an index's old
+        # documents from new ones); event.ingested above says when. Not part
+        # of the detection id, so a new version never duplicates a detection.
+        agent    = [ordered]@{ name = 'EVTXER'; type = 'evtxer' }
         # Hayabusa's own one-line summary stays as it was. ExtraFieldInfo is no
         # longer written separately: every one of its fields is in
         # winlog.event_data below, under the same name.
@@ -477,6 +481,7 @@ function ConvertTo-EcsDocument($Doc, [string]$ImportId, [hashtable]$Aliases) {
     # which silently diverged the two importers.
     if ($Doc.Provider -and $Doc.Provider -ne '-') { $out.event.provider = $Doc.Provider }
     if ($Doc.EvtxFile)          { $out.import.file = $Doc.EvtxFile }
+    if ($script:ToolVersion)    { $out.agent.version = "$script:ToolVersion" }
 
     $rule = [ordered]@{}
     if ($Doc.RuleTitle)  { $rule.name = $Doc.RuleTitle }
@@ -1991,15 +1996,42 @@ function Get-CollectFailureText([Exception]$Exception) {
     return (ConvertFrom-WrappedErrorText "$($e.Message)")
 }
 
-function Get-ConnectionHint([string]$Message, [string]$HostName, [int]$Port) {
+function Get-LocalAddressFor([string]$HostName, [int]$Port) {
+    # This PC's address on the way to HostName - what Security Onion's firewall
+    # has to let in. A UDP "connect" only picks the route; nothing is sent.
+    try {
+        $u = New-Object Net.Sockets.UdpClient
+        try { $u.Connect($HostName, $Port); return $u.Client.LocalEndPoint.Address.ToString() } finally { $u.Close() }
+    } catch { return '' }
+}
+
+function Get-ConnectionHint([string]$Message, [string]$HostName, [int]$Port, $LocalIp = $null) {
+    # $LocalIp untyped on purpose: [string] turns 'not given' into '', and
+    # then the address was never looked up. Tests pass it; callers do not.
     # "Unable to connect to the remote server" or a .NET 'Exception calling
     # "EndConnect"...' said nothing about the usual first-day cause - Security
     # Onion's firewall - while the Collect tab names a fix for every port
-    # (usability walk, 2026-10-21). Nothing answering gets that hint; any
-    # other error is passed on, unwrapped.
+    # (usability walk, 2026-10-21). Nothing answering gets that hint, with
+    # what the Security Onion administrator needs - this PC's address and the
+    # exact command (owner, 2026-10-26); any other error is passed on, unwrapped.
     $m = ConvertFrom-WrappedErrorText $Message
-    if ($m -match '(?i)actively refused|unable to connect|timed out|could not be resolved|no such host|unreachable|did not properly respond|connection attempt failed') {
-        return "Nothing answered at ${HostName}:$Port. Check the host and port. On Security Onion this PC must first be let through its firewall - README.txt, SECURITY ONION: LETTING EVTXER IN. (Windows said: $m)"
+    if ($m -match '(?i)could not be resolved|no such host') {
+        return "$HostName could not be found - check the name, or use the manager's IP address. (Windows said: $m)"
+    }
+    if ($m -match '(?i)actively refused|unable to connect|timed out|unreachable|did not properly respond|connection attempt failed') {
+        $group = @{ 9200 = 'elasticsearch_rest'; 443 = 'analyst' }[$Port]
+        $hint = "Nothing answered at ${HostName}:$Port. Check the host and port."
+        if ($group) {
+            # Security Onion's command, offered as such: 9200 is also a plain
+            # Elastic stack's port, where so-firewall does not exist (review).
+            if ($null -eq $LocalIp) { $LocalIp = Get-LocalAddressFor $HostName $Port }
+            $ip = if ($LocalIp) { $LocalIp } else { "<this PC's IP address - ipconfig shows it>" }
+            $hint += " If they are right and this is Security Onion, its firewall is not letting this PC in" +
+                     $(if ($LocalIp) { " - this PC's address is $LocalIp" }) +
+                     ". Ask its administrator to run on the manager:`n    sudo so-firewall --apply includehost $group $ip`n"
+            if ($Port -eq 9200) { $hint += "On a plain Elastic stack: check that Elasticsearch is running and the server's firewall allows port 9200.`n" }
+        } else { $hint += ' On Security Onion this PC must first be let through its firewall. ' }
+        return "${hint}README.txt, SECURITY ONION: LETTING EVTXER IN. (Windows said: $m)"
     }
     return $m
 }
@@ -2345,7 +2377,8 @@ function Get-IndexCreateBody([string]$TemplateJson) {
 
 function Get-IndexMappingPatch([string]$TemplateJson) {
     # What an index created before v37 is missing from the current template:
-    # event.id and the winlog.event_data dynamic mapping. The template only
+    # event.id and the winlog.event_data dynamic mapping - and, from before
+    # v72, the agent.* version stamp. The template only
     # applies when an index is CREATED, so appending into an older one left
     # the new fields stored but unsearchable, silently. Sent as PUT _mapping.
     $m = ($TemplateJson | ConvertFrom-Json).template.mappings
@@ -2354,6 +2387,7 @@ function Get-IndexMappingPatch([string]$TemplateJson) {
         properties = @{
             event  = @{ properties = @{ id = $m.properties.event.properties.id } }
             winlog = @{ properties = @{ event_data = $m.properties.winlog.properties.event_data } }
+            agent  = $m.properties.agent
         }
     } | ConvertTo-Json -Depth 12 -Compress
 }
@@ -3211,6 +3245,8 @@ function Start-EcsWorker {
     $script = @(
         "try {"
         "    . $(& $lit $script:HayabusaLibPath)"
+        # The version stamp (agent.version): only the launcher defines it.
+        "    `$script:ToolVersion = $(& $lit $script:ToolVersion)"
         "    `$fp = @(Get-CollectionFootprints $(& $lit $EvtxDir))"
         "    `$al = Get-DetailsAliasMap $(& $lit $HayabusaDir)"
         "    `$r = Convert-EcsRange -Source $(& $lit $Source) -Destination $(& $lit $PartPath) -ImportId $(& $lit $ImportId) ``"
@@ -3462,10 +3498,44 @@ function Get-SoRemoteCommand {
     switch ($Step) {
         'Test'   { return "echo EVTXER-SSH-OK; sudo -S -p '' true && echo EVTXER-SUDO-OK; " +
                           "command -v so-import-evtx >/dev/null 2>&1 || test -x /usr/sbin/so-import-evtx && echo EVTXER-IMPORTER-OK" }
-        'Stage'  { return "mkdir -p $RemoteDir && chmod 700 $RemoteDir && echo EVTXER-STAGED" }
+        # The free space rides on this call (ConvertFrom-DfOutput); '; true'
+        # because df fails where /nsm does not exist - EVTXER-STAGED still
+        # says whether the folder was made.
+        'Stage'  { return "mkdir -p $RemoteDir && chmod 700 $RemoteDir && echo EVTXER-STAGED; df -Pk /tmp /nsm 2>/dev/null; true" }
         'Import' { return "sudo -S -p '' so-import-evtx $RemoteDir/*.evtx" }
         'Clean'  { return "rm -rf $RemoteDir && echo EVTXER-CLEANED" }
     }
+}
+
+function ConvertFrom-DfOutput([string[]]$Lines) {
+    # 'df -Pk': "Filesystem 1024-blocks Used Available Capacity Mounted on",
+    # one row per path asked, in that order. Anything else is skipped.
+    @(foreach ($l in $Lines) {
+        if ("$l" -match '^\S+\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)%\s+(/\S*)\s*$') {
+            [pscustomobject]@{ Mount = $Matches[5]; SizeKB = [long]$Matches[1]; AvailKB = [long]$Matches[3]; UsedPct = [int]$Matches[4] }
+        }
+    })
+}
+
+function Get-SoDiskWarning([object[]]$Disks, [long]$SendBytes) {
+    # A warning, never a stop (owner, 2026-10-26: "more of a warning than
+    # anything", and not polled). $Disks = ConvertFrom-DfOutput of
+    # 'df -Pk /tmp /nsm': [0] where the files are staged, [1] /nsm, where
+    # so-import-evtx keeps its copy and Elasticsearch indexes every event -
+    # about 3x the EVTX, a rough rule. Elasticsearch stops placing data at
+    # 90% full and refuses writes at 95%, so this speaks up past 85%.
+    $gb = { param($b) '{0:N1} GB' -f ($b / 1GB) }
+    @(
+        if (@($Disks).Count -ge 1 -and $Disks[0].AvailKB * 1KB -lt $SendBytes * 1.1) {
+            "The manager's /tmp has $(& $gb ($Disks[0].AvailKB * 1KB)) free and this import stages $(& $gb $SendBytes) there - the copy may fail."
+        }
+        if (@($Disks).Count -ge 2 -and $Disks[1].SizeKB -gt 0) {
+            $n = $Disks[1]; $need = $SendBytes * 3
+            if ((($n.SizeKB - $n.AvailKB) * 1KB + $need) / ($n.SizeKB * 1KB) -gt 0.85) {
+                "/nsm on the manager has $(& $gb ($n.AvailKB * 1KB)) free ($($n.UsedPct)% used) and this import may need about $(& $gb $need) there (a copy of the files plus the indexed events). Elasticsearch refuses new data at 95% full - free space there, or import fewer hosts."
+            }
+        }
+    )
 }
 
 function Get-SoTestVerdict([string[]]$Lines) {
@@ -3683,6 +3753,8 @@ function Get-ManualEcsCommand {
         '# Manual ECS conversion - the same function the Convert tab runs.'
         '# Start PowerShell with:   powershell -ExecutionPolicy Bypass'
         ". $(ConvertTo-PsLiteral $LibPath)"
+        # The version stamp (agent.version) - a fresh console has none.
+        "`$script:ToolVersion = $(ConvertTo-PsLiteral "$script:ToolVersion")"
         ("Convert-HayabusaJsonlToEcs -Source $(ConvertTo-PsLiteral $src) -Destination $(ConvertTo-PsLiteral $dst)" +
             $(if ($EvtxDir) { " -EvtxDir $(ConvertTo-PsLiteral $EvtxDir)" } else { '' }))
     ) -join "`r`n")
@@ -4432,6 +4504,134 @@ function Get-WhereToLook([ValidateSet('detections', 'raw')][string]$Kind) {
     return "Where to look: Security Onion's Hunt and Dashboards, and Kibana's Raw Events dashboards."
 }
 
+# ------------------------------------------------------------------ guide ---
+# The Guide tab (owner, 2026-10-26): a cheat sheet for the crew - a short
+# answer to each thing that is not obvious - and one search over it and the
+# whole README.txt, which stays the full manual. Each entry's Chapter is a
+# README heading (Guide.Tests checks every one exists). Plain ASCII only:
+# PowerShell 5.1 reads this BOM-less file in the ANSI code page.
+function Get-ReadmeChapters([string]$Text) {
+    # A chapter is a heading line underlined with dashes, up to the next one.
+    $lines = $Text -split "\r?\n"
+    $heads = @(for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^-{4,}$' -and $lines[$i - 1].Trim()) { $i - 1 }
+    })
+    @(for ($k = 0; $k -lt $heads.Count; $k++) {
+        $to = if ($k + 1 -lt $heads.Count) { $heads[$k + 1] - 1 } else { $lines.Count - 1 }
+        [pscustomobject]@{ Title = $lines[$heads[$k]].Trim(); Body = ($lines[$heads[$k]..$to] -join "`r`n").TrimEnd() }
+    })
+}
+
+function Get-SearchWords([string]$Query) {
+    return @("$Query".ToLowerInvariant() -split '\s+' | Where-Object { $_ })
+}
+
+function Test-GuideMatch($Entry, [string]$Query) {
+    # Every word, any case, somewhere in the entry.
+    $hay = "$($Entry.Group) $($Entry.Title) $($Entry.Answer)".ToLowerInvariant()
+    foreach ($w in Get-SearchWords $Query) { if (-not $hay.Contains($w)) { return $false } }
+    return $true
+}
+
+function Find-ReadmeChapters([object[]]$Chapters, [string]$Query) {
+    # The chapters holding every word, the most matches first.
+    $words = Get-SearchWords $Query
+    if (-not $words.Count) { return @() }
+    $hits = @(foreach ($c in $Chapters) {
+        $low = $c.Body.ToLowerInvariant(); $n = 0
+        foreach ($w in $words) {
+            $m = [regex]::Matches($low, [regex]::Escape($w)).Count
+            if (-not $m) { $n = 0; break }
+            $n += $m
+        }
+        if ($n) { [pscustomobject]@{ Title = $c.Title; Count = $n; Label = "$($c.Title)   -   $n match$(if ($n -ne 1) { 'es' })" } }
+    })
+    return @($hits | Sort-Object @{ Expression = 'Count'; Descending = $true }, Title)
+}
+
+function Get-GuideEntries {
+    $e = { param($Group, $Chapter, $Title, $Answer) [pscustomobject]@{ Group = $Group; Chapter = $Chapter; Title = $Title; Answer = $Answer; More = "More: $Chapter" } }
+    $find = 'FINDING THINGS: TIME, PIVOTS, WHERE DATA LANDS'
+    $raw = 'EVERY RAW EVENT, NOT JUST DETECTIONS (SECURITY ONION)'
+    @(
+        & $e 'Times' $find 'When did a raw event really happen? (Security Onion)' (
+            'Security Onion 2.4 files raw imports under the time of the IMPORT: @timestamp is when you imported. ' +
+            "The event's own time is event.created. In Hunt or Dashboards: set the time range to cover the import, " +
+            'add the event.created column and sort by it. In Kibana: the Raw Events dashboards, or Discover with the ' +
+            'data view "Raw Windows events (Security Onion)" - its time field is event.created.')
+        & $e 'Times' $find 'Are the times on Hayabusa detections right?' (
+            "Yes. A detection's @timestamp is when the event happened on the machine, in UTC. Kibana shows it in " +
+            "your browser's time zone.")
+        & $e 'Pivoting' $find 'How do I get from a detection to the full log?' (
+            'Take three fields from the detection: host.name, winlog.channel and winlog.record_id. Search the raw ' +
+            'events (Security Onion Hunt, or Kibana Discover) for:  winlog.computer_name:"WS01" AND ' +
+            'winlog.channel:"Security" AND winlog.record_id:12345   AND in capitals: Security Onion reads a ' +
+            'lower-case "and" as a word to find. Values are case-sensitive - type them as the ' +
+            'detection shows them. The logs must have been raw-imported first.')
+        & $e 'Pivoting' $find 'Why does a detection not show the whole event?' (
+            'Hayabusa sends only what a rule matched: the matched events, with the fields Hayabusa extracts ' +
+            '(winlog.event_data.*, hayabusa.details). The whole event, and every event no rule matched, is only ' +
+            "in the raw import - Raw Events tab, or the queue's Raw import to SO.")
+        & $e 'Where data lands' $find "Why are my detections not in Security Onion's Hunt or Alerts?" (
+            'Detections go into their own index, hayabusa-mission-<mission name>, so they can be dropped cleanly. ' +
+            "Hunt and Alerts search only Security Onion's own indices. Look in Kibana: Discover, or the Hayabusa " +
+            'dashboards (the Kibana Dashboards tab imports them).')
+        & $e 'Where data lands' $find 'Where do raw events land?' (
+            "In Security Onion's own logs-import-so data stream: Hunt, Dashboards, and Kibana's Raw Events " +
+            'dashboards. Security Onion only - a plain Elastic stack has no importer, so only detections go there.')
+        & $e 'Where data lands' 'THINGS WORTH KNOWING' 'Which EVTXER version made a detection?' (
+            'agent.version on every detection EVTXER converts (from v72); event.ingested says when it was ' +
+            'converted. In Kibana: agent.version : 72')
+        & $e 'Duplicates' 'THINGS WORTH KNOWING' 'What if I upload the same logs to ELK twice?' (
+            'Nothing doubles. Every detection has a fixed id (event.id); one already in the index is counted as ' +
+            "'already there' and skipped, so a re-pull adds only new detections. One exception: a rules update " +
+            'that renamed a rule brings its old detections back under the new title.')
+        & $e 'Duplicates' $raw 'What if I raw-import the same logs twice?' (
+            'An identical file is skipped - Security Onion knows files by content (MD5). But the same machine ' +
+            'pulled on two days is two different files, and the events they share are imported twice. Queue only ' +
+            'the newest folder of each machine.')
+        & $e 'Disk' $raw "What does 'LOW DISK on the manager' mean?" (
+            'Checked once per raw import: /tmp cannot hold the files, or /nsm would pass 85% full (Security Onion ' +
+            'keeps a copy of the files and indexes every event - about 3x the EVTX). Elasticsearch refuses new ' +
+            'data at 95%. A warning only - the import still runs. On the manager: df -h /tmp /nsm')
+        & $e 'Queue and archive' 'ARCHIVE (SETTINGS TAB)' 'What does Archive delete?' (
+            'For each host folder it zips the EVTX into the archive folder, reads every file back (SHA-256), and ' +
+            'only then deletes that host folder from the EVTX drop folder. If the drop folder is your only copy - ' +
+            'a share you want to keep - leave Archive unticked.')
+        & $e 'Queue and archive' 'THE QUEUE (AUTOMATIC PROCESSING)' 'A queue row is amber - why?' (
+            'Amber means waiting for you, and the row says what for: the mission name, VERIFY CONNECTIVITY, the ' +
+            'Raw Events tab, a password, or the PCAP question. Fix that and the job carries on by itself.')
+        & $e 'Queue and archive' 'THE QUEUE (AUTOMATIC PROCESSING)' 'How do I run 30+ machines?' (
+            'Settings: point the EVTX drop folder at the folder whose subfolders are the machines. Tick the steps ' +
+            'under QUEUE, then Add folders... and Select all. It runs one machine at a time, start to finish. For a ' +
+            'second pass (raw import only, say): change the ticks, Clear done, Add folders... again.')
+        & $e 'Passwords and PCAP' 'REMEMBERED PASSWORDS' 'Why did EVTXER forget my password?' (
+            'A password is kept only when Remember is ticked, after a check that worked - encrypted for your ' +
+            'Windows account on this machine. Otherwise it lasts until EVTXER closes, and after a restart the ' +
+            'queue waits in amber for it.')
+        & $e 'Passwords and PCAP' 'ACCOUNTABILITY PCAP (SETTINGS TAB)' 'The queue stopped after the PCAP question - why?' (
+            'Closing that question means cancel: uploads and raw imports wait. Press Retry on the row to be ' +
+            'asked again - then START CAPTURE, or Continue without capture.')
+        & $e 'Connecting' 'SECURITY ONION: LETTING EVTXER IN' "VERIFY CONNECTIVITY says 'Nothing answered at ...:9200'?" (
+            'If the host and port are right, Security Onion''s firewall is not letting this machine in - rare, ' +
+            'it usually already is. The message itself names this machine''s IP and the command for the ' +
+            'administrator to run on the manager: sudo so-firewall --apply includehost elasticsearch_rest <IP> ' +
+            '(for 9200, uploads) or ... includehost analyst <IP> (for 443, the Kibana tab).')
+        & $e 'Connecting' 'SECURITY ONION: LETTING EVTXER IN' 'We sign in with SSO - does EVTXER work?' (
+            'EVTXER logs in with a username and password. If an SSO-only account is refused: uploads - an API ' +
+            'key made in Kibana, Username left empty; dashboards - import kibana dashboards\' +
+            'hayabusa-kibana-objects.ndjson by hand in Kibana (Stack Management > Saved Objects > Import); raw ' +
+            'imports use an SSH account and are not affected.')
+        & $e 'Mission and pills' 'MISSION (SETTINGS TAB)' 'What is the mission name for?' (
+            'Every upload of the mission goes into one index, hayabusa-mission-<name>; uploads wait until it is ' +
+            "named. 'Delete mission index...' removes just that index - rarely needed when the stack is rebuilt " +
+            'after each mission.')
+        & $e 'Mission and pills' 'THE EIGHT TABS' 'What do the pills at the top mean?' (
+            'Mission, ELK, SO: green = set up, grey = not yet (SO is only needed for raw imports). PCAP: red with ' +
+            'a pulsing dot = recording. Click one to open the tab that fixes it.')
+    )
+}
+
 function Test-PcapReminderDue($Settings, [int]$RunningCount, [datetime]$Now = (Get-Date),
                               # Answered "continue without capture" already this
                               # session (once per session - the
@@ -4758,7 +4958,7 @@ function Invoke-SoImport {
           [scriptblock]$OnProgress)
     if (-not $Log) { $Log = { param($t, $k) } }
     if (-not $OnProgress) { $OnProgress = { param($d, $t, $x) } }
-    $r = [pscustomobject]@{ Outcome = 'FAILED'; Detail = ''; Error = ''; Sent = 0; Bytes = [long]0; Left = ''; Result = $null }
+    $r = [pscustomobject]@{ Outcome = 'FAILED'; Detail = ''; Error = ''; Sent = 0; Bytes = [long]0; Left = ''; Result = $null; DiskWarning = '' }
     $soPw = $null; $soRemote = ''; $soStaged = $false
     # One remote command; with -Sudo the password goes to plink's stdin,
     # which plink hands to the remote command, where sudo -S reads it.
@@ -4779,6 +4979,9 @@ function Invoke-SoImport {
         $s = & $soPlink 'Stage on the manager' (Get-SoRemoteCommand Stage $soRemote)
         if ($s.Code -ne 0 -or -not ($s.Lines -match 'EVTXER-STAGED')) { throw "could not create $soRemote on the manager (exit $($s.Code))" }
         $soStaged = $true
+        # The manager's free space, read on that same call - once per import.
+        $r.DiskWarning = @(Get-SoDiskWarning @(ConvertFrom-DfOutput $s.Lines) ([long](@($Files) | Measure-Object Length -Sum).Sum)) -join ' '
+        if ($r.DiskWarning) { & $Log "LOW DISK ON THE MANAGER: $($r.DiskWarning)`n" 'warn' }
 
         $i = 0; $n = @($Files).Count
         foreach ($f in $Files) {
@@ -4820,6 +5023,9 @@ function Invoke-SoImport {
         }
         if ($soPw) { Remove-Item -LiteralPath $soPw -Force -ErrorAction SilentlyContinue }
     }
+    # In Detail, so the tab, the queue and the activity log carry it - on
+    # success and on the failure it may have predicted.
+    if ($r.DiskWarning) { $r.Detail = "$($r.Detail) - LOW DISK on the manager: $($r.DiskWarning.TrimEnd('.'))" }
     return $r
 }
 
@@ -5014,7 +5220,7 @@ function Invoke-QueueStep {
     $step = [string]@($Job.Steps)[$Job.Step]
     $results = Join-Path $Job.OutDir 'results.jsonl'
     $ecs = Get-EcsOutputPath $results
-    $r = [pscustomobject]@{ Ok = $false; Cancelled = $false; Summary = ''; Detections = $null; Skip = @(); Ledger = @() }
+    $r = [pscustomobject]@{ Ok = $false; Cancelled = $false; Summary = ''; Detections = $null; Skip = @(); Ledger = @(); Warning = '' }
     $row = @{ Target = $Job.Name; Output = ''; Files = '' }
     $clock = [Diagnostics.Stopwatch]::StartNew()
     & $qlog "==== $(Get-Date -Format s) $($script:QueueStepText[$step].Run): $($Job.Folder)"
@@ -5071,6 +5277,7 @@ function Invoke-QueueStep {
                 if ($s.Outcome -eq 'Cancelled') { throw 'Cancelled.' }
                 if ($s.Outcome -notin 'Success', 'Partial') { throw $s.Detail }
                 $r.Summary = $s.Detail
+                $r.Warning = $s.DiskWarning
             }
             'archive' {
                 $row.Action = 'EVTX archive'; $row.Protocol = $(if ($Context.ArchiveRoot -like '\\*') { 'SMB' } else { 'local' })

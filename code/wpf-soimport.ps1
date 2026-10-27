@@ -343,6 +343,7 @@ $btnSoImport.Add_Click({
                                 "`nThey can take 30 seconds or more to appear.`n$(Get-WhereToLook 'raw')"
             Write-Log "$(Get-WhereToLook 'raw')`n" 'info'
             $lblSoResult.Foreground = if ($r.Warnings) { $script:SoBrush.warn } else { $script:SoBrush.ok }
+            if ($s.DiskWarning) { $lblSoResult.Foreground = $script:SoBrush.warn }
             if ($r.Url) {
                 $script:SoUrl = $r.WideUrl
                 try { $hlSo.NavigateUri = New-Object System.Uri($r.Url) } catch { }
@@ -353,7 +354,7 @@ $btnSoImport.Add_Click({
             try { Show-HostLinks $pnlSoHostLinks @(Get-EvtxHostNames $txtSoFolder.Text.Trim()) }
             catch { Write-Log "Could not build the host links: $($_.Exception.Message)`n" 'warn' }
         } else {
-            $lblSoResult.Text = "Not imported: $($s.Error)"
+            $lblSoResult.Text = "Not imported: $($s.Detail)"
             $lblSoResult.Foreground = $script:SoBrush.err
         }
     } finally {

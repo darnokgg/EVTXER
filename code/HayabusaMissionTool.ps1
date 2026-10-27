@@ -46,7 +46,7 @@ $script:AppRoot = Split-Path -Parent $script:ScriptPath
 $script:Root    = Split-Path -Parent $script:AppRoot
 if (-not $script:Root) { $script:Root = (Get-Location).Path }
 
-$script:ToolVersion = '71'
+$script:ToolVersion = '75'
 # The Settings tab can move the EVTX drop folder and the archive; both are
 # saved in code\settings.conf, beside importer.conf.
 $script:SettingsPath = Join-Path $script:AppRoot 'settings.conf'
@@ -595,6 +595,7 @@ $xaml = @'
         <TabItem Header="Kibana Dashboards"><ScrollViewer x:Name="tabKibana" VerticalScrollBarVisibility="Auto"/></TabItem>
         <TabItem Header="Raw Events (SO)"><ScrollViewer x:Name="tabSoImport" VerticalScrollBarVisibility="Auto"/></TabItem>
         <TabItem Header="Settings"><ScrollViewer x:Name="tabSettings" VerticalScrollBarVisibility="Auto"/></TabItem>
+        <TabItem Header="Guide"><ScrollViewer x:Name="tabGuide" VerticalScrollBarVisibility="Auto"/></TabItem>
       </TabControl>
 
       <!-- The divider. A visible grip, because a transparent splitter is one
@@ -708,7 +709,7 @@ $win    = [Windows.Markup.XamlReader]::Load($reader)
 
 # Every x:Name becomes a variable of the same name, so handler code reads the
 # same as it did against WinForms controls.
-foreach ($name in @('tabs','tabCollect','tabConvert','tabUpload','tabTakajo','tabKibana','tabSoImport','tabSettings',
+foreach ($name in @('tabs','tabCollect','tabConvert','tabUpload','tabTakajo','tabKibana','tabSoImport','tabSettings','tabGuide',
                     'log','bar','lblStatus','lblVersion',
                     'colLog','btnCancel','chkConsole',
                     'pnlBusy','spinner','lblBusy','pnlPcap','dotPcap','lblPcap','pnlPillMission','dotPillMission','lblPillMission',
@@ -1447,7 +1448,7 @@ $win.Add_Closing({
 $script:Busy = $false
 $missingTabs = @()
 foreach ($tabFile in 'wpf-collect.ps1', 'wpf-convert.ps1', 'wpf-upload.ps1', 'wpf-takajo.ps1',
-                     'wpf-kibana.ps1', 'wpf-soimport.ps1', 'wpf-settings.ps1', 'wpf-queue.ps1') {
+                     'wpf-kibana.ps1', 'wpf-soimport.ps1', 'wpf-settings.ps1', 'wpf-guide.ps1', 'wpf-queue.ps1') {
     $path = Join-Path $PSScriptRoot $tabFile
     # A missing tab used to be skipped in silence - and a code\ folder left
     # behind on a deployment copy is exactly how one goes missing.

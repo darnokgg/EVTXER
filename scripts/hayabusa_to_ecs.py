@@ -297,6 +297,21 @@ def detection_id(doc):
     return hashlib.sha1(key.encode("utf-8")).hexdigest()
 
 
+def evtxer_version():
+    # The launcher defines EVTXER's version ($script:ToolVersion); the twin
+    # stamps the same agent.version as the PowerShell conversion.
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "code", "HayabusaMissionTool.ps1")
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            m = re.search(r"\$script:ToolVersion = '([^']+)'", f.read())
+        return m.group(1) if m else None
+    except OSError:
+        return None
+
+
+EVTXER_VERSION = evtxer_version()
+
+
 def transform(doc, import_id, import_file=None, aliases=None):
     details = doc.get("Details") or {}
     extra = doc.get("ExtraFieldInfo") or {}
@@ -333,6 +348,8 @@ def transform(doc, import_id, import_file=None, aliases=None):
         # Mirrors Security Onion's own convention so one batch can be isolated
         # with `import.id: <id>`, exactly like so-import-pcap data.
         "import": {"id": import_id},
+        # Which EVTXER made it; event.ingested says when. Not in the id.
+        "agent": {"name": "EVTXER", "type": "evtxer"},
         # ExtraFieldInfo is not written separately any more: all of it is in
         # winlog.event_data, under the same names.
         "hayabusa": {"details": details},
@@ -342,6 +359,7 @@ def transform(doc, import_id, import_file=None, aliases=None):
     add(out["event"], "code", str(event_id) if event_id is not None else None)
     add(out["event"], "provider", doc.get("Provider"))
     add(out["import"], "file", import_file or doc.get("EvtxFile"))
+    add(out["agent"], "version", EVTXER_VERSION)
 
     # --- rule ---------------------------------------------------------------
     rule = {}

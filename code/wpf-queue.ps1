@@ -353,6 +353,13 @@ function Complete-QueueStep($Run) {
         while ($job.Step -lt @($job.Steps).Count -and @($res.Skip) -contains [string]@($job.Steps)[$job.Step]) { $job.Step++ }
         $job.Note = ''
         Write-Log -Background "[Queue] $($job.Name): $what - $($res.Summary)`n" 'ok'
+        # A low-disk warning stays in sight over a long run: its own amber
+        # line, and on the row ("Done - LOW DISK ...") - not only at the end
+        # of a green one (review, 2026-10-26).
+        if ($res.Warning) {
+            $job.Note = "LOW DISK on the manager - $($res.Warning)"
+            Write-Log -Background "[Queue] $($job.Name): LOW DISK on the manager - $($res.Warning)`n" 'warn'
+        }
         # Where the data now shows - once a session per kind, not per host.
         if ($step -in 'upload', 'raw' -and -not $script:QueueToldWhere[$step]) {
             $script:QueueToldWhere[$step] = $true
