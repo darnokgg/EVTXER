@@ -60,7 +60,7 @@ Assert-True (-not (Test-GuideMatch ([pscustomobject]@{ Group = 'Times'; Title = 
 
 # ---- the tab ----
 $shell = Get-Content (Join-Path $code 'HayabusaMissionTool.ps1') -Raw
-Assert-True ($shell -match '<TabItem Header="Guide"><ScrollViewer x:Name="tabGuide"') "the Guide tab, after Settings"
+Assert-True ($shell -match '<TabItem Header="Guide"[^>]*><ScrollViewer x:Name="tabGuide"') "the Guide tab, after Settings"
 Assert-True ($shell -match "'wpf-settings\.ps1', 'wpf-guide\.ps1'") "loaded with the other tabs"
 $busy = [regex]::Match($shell, '(?s)function Set-AppBusy.*?\r?\n\}').Value
 Assert-True ($busy -notmatch 'tabGuide') "a running job does not lock it - reading while waiting is the point"

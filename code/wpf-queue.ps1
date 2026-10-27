@@ -3,7 +3,7 @@
     The job queue pane - WPF fragment, dot-sourced by HayabusaMissionTool.ps1.
 
 .DESCRIPTION
-    Under the tabs and the log, so it is in sight whatever tab is open. Every host Collect EVTX brings in becomes one job, and the
+    Under the tabs and the log, so it is in sight whatever tab is open. Every host the Collect tab brings in becomes one job, and the
     steps ticked on this pane run by themselves, one job at a time (the
     switches moved here from the Settings tab on 2026-10-18 - the queue is
     the main path, the tabs the manual one): a Hayabusa scan of that folder -> ECS -> upload to the mission
@@ -45,7 +45,7 @@ $queueXaml = @'
       <CheckBox x:Name="chkAutoUpload" Tag="AutoUpload" Content="Upload" Margin="14,0,0,0" VerticalAlignment="Center"
                 ToolTip="To the mission index. Needs Convert, the mission name (Settings tab) and VERIFY CONNECTIVITY (Upload tab) - the Mission and ELK pills at the top turn green."/>
       <CheckBox x:Name="chkAutoRaw" Tag="AutoRaw" Content="Raw import to SO" Margin="14,0,0,0" VerticalAlignment="Center"
-                ToolTip="Every event into Security Onion. Needs the Raw Events (SO) tab filled in, host key included - the SO pill at the top turns green."/>
+                ToolTip="Every event into Security Onion. Needs the Raw Events tab filled in, host key included - the SO pill at the top turns green."/>
       <CheckBox x:Name="chkAutoArchive" Tag="AutoArchive" Content="Archive when done" Margin="14,0,0,0" VerticalAlignment="Center"
                 ToolTip="A verified zip into the archive folder (Settings tab), then the host folder's EVTX are deleted."/>
     </WrapPanel>
@@ -251,7 +251,7 @@ function Show-Queue {
     foreach ($j in $script:Jobs) { $count[$j.State] = 1 + [int]$count[$j.State] }
     $parts = @(foreach ($s in 'running', 'queued', 'waiting', 'failed') { if ($count[$s]) { "$($count[$s]) $s" } })
     $lblQueue.Text = if ($script:Jobs.Count) { (@("$([int]$count['done']) of $($script:Jobs.Count) hosts done") + $parts) -join ' - ' }
-                     elseif (@(Get-QueueSteps $script:Settings).Count) { 'Empty. Every host Collect EVTX brings in is queued here and processed by itself.' }
+                     elseif (@(Get-QueueSteps $script:Settings).Count) { 'Empty. Every host the Collect tab brings in is queued here and processed by itself.' }
                      else { 'Empty, and nothing is ticked to run by itself (Runs by itself, above).' }
 }
 
@@ -278,7 +278,7 @@ function Get-QueueBlockers {
     if (-not (Get-MissionIndexName $script:Settings.MissionName)) { $b.upload = 'name the mission on the Settings tab' }
     elseif (-not $script:ConnOk -or $script:ConnKey -ne (Get-UploadConnKey)) { $b.upload = 'press VERIFY CONNECTIVITY on the Upload tab' }
     if (-not (Test-SoReady)) {
-        $b.raw = 'fill in the Raw Events (SO) tab - host, user, password and host key'
+        $b.raw = 'fill in the Raw Events tab - host, user, password and host key'
     } elseif (-not (Find-PuttyTool plink) -or -not (Find-PuttyTool pscp)) { $b.raw = 'code\putty\plink.exe and pscp.exe are missing' }
     # Closing the PCAP question cancels, as it does for every other network
     # action: nothing more goes out until the operator says so.

@@ -115,7 +115,7 @@ $convertXaml = @'
         <!-- Nothing here said the queue already does this for collected hosts,
              so a newcomer scanned them twice (usability walk, 2026-10-21). -->
         <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,0,0,8"
-                   Text="Hosts brought in by Collect EVTX are scanned and converted by the QUEUE below on their own. Use this tab for EVTX from anywhere else."/>
+                   Text="Hosts brought in by the Collect tab are scanned and converted by the QUEUE below on their own. Use this tab for EVTX from anywhere else."/>
         <TextBlock x:Name="lblPaths" Style="{StaticResource Hint}"
                    FontFamily="Consolas" TextWrapping="NoWrap"/>
       </StackPanel>

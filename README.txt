@@ -46,22 +46,23 @@ Requires Windows x64 and PowerShell 5.1 (built into Windows 10/11).
 THE EIGHT TABS
 --------------
 
-1. Collect EVTX             Pull .evtx from remote hosts over SMB or WinRM
+1. Collect                  Pull .evtx from remote hosts over SMB or WinRM
                             (plain, or over HTTPS).
                             Lands in evtx\<hostname>_<timestamp>\
 
-2. Convert (Hayabusa)       Scan those logs. Writes two files - see below.
+2. Convert                  Scan those logs with Hayabusa. Writes two files -
+                            see below.
 
-3. Upload to ELK            Ship the detections to an Elasticsearch index.
+3. Upload                   Ship the detections to an Elasticsearch index.
 
-4. Takajo Analysis          CSV results, or an offline HTML report (OPEN
+4. Takajo                   CSV results, or an offline HTML report (OPEN
                             REPORT opens it from disk - nothing listens).
 
-5. Kibana Dashboards        Import the 9 dashboards and 9 saved searches into
+5. Dashboards               Import the 9 dashboards and 9 saved searches into
                             Kibana, using the connection from tab 3.
                             Security Onion only - on plain Elastic, import by hand.
 
-6. Raw Events (SO)          Send the .evtx themselves to the Security Onion
+6. Raw Events               Send the .evtx themselves to the Security Onion
                             manager and run its own importer there, so EVERY
                             event is searchable - not only the ones a
                             Hayabusa rule matched. Security Onion only.
@@ -85,7 +86,7 @@ open the tab that fixes it:
 
     Mission   green once the mission is named (Settings tab)
     ELK       green once VERIFY CONNECTIVITY passed (Upload tab)
-    SO        green once the Raw Events (SO) tab is filled in - only needed
+    SO        green once the Raw Events tab is filled in - only needed
               for raw imports, so grey is fine on a plain Elastic stack
     PCAP      red, dot pulsing, while an accountability capture records;
               grey "No PCAP" when none does (hover for the file)
@@ -406,7 +407,7 @@ THINGS WORTH KNOWING
 
 - The upload pins the Elasticsearch certificate by default. Press Fetch, confirm
   the fingerprint once, and every later connection must match it.
-  The Kibana Dashboards tab needs a SECOND fingerprint (its own Fetch button):
+  The Dashboards tab needs a SECOND fingerprint (its own Fetch button):
   Security Onion's web interface on port 443 uses a different certificate
   from Elasticsearch on 9200. Without it the import fails with "Could not
   establish trust relationship for the SSL/TLS secure channel".
@@ -558,7 +559,7 @@ THINGS WORTH KNOWING
 THE QUEUE (AUTOMATIC PROCESSING)
 --------------------------------
 
-The operator only collects. Every host Collect EVTX brings in becomes a job
+The operator only collects. Every host the Collect tab brings in becomes a job
 in the QUEUE at the bottom of the window (always in sight, whatever tab is
 open), and the rest runs by itself, one host at a time:
 
@@ -590,7 +591,7 @@ A job waits (amber) instead of failing when it needs you:
 - upload: name the mission (Settings tab) and press VERIFY CONNECTIVITY on
   the Upload tab. With "Remember password" ticked, that is one click per
   session.
-- raw import: fill in the Raw Events (SO) tab - host, user, password, host key.
+- raw import: fill in the Raw Events tab - host, user, password, host key.
 While one host waits, the next one is scanned; the waiting one goes on by
 itself as soon as it has what it needs.
 
@@ -932,9 +933,9 @@ SECURITY ONION: LETTING EVTXER IN
 
 Security Onion's firewall only lets listed machines reach it. EVTXER needs:
 
-  Upload to ELK tab     port 9200 (Elasticsearch)
-  Kibana Dashboards     port 443  (the web interface - analysts usually have it)
-  Raw Events (SO) tab   port 22   (SSH - open to anywhere by default)
+  Upload tab            port 9200 (Elasticsearch)
+  Dashboards tab        port 443  (the web interface - analysts usually have it)
+  Raw Events tab        port 22    (SSH - open to anywhere by default)
 
 USUALLY NOTHING TO DO. If uploads from this machine have worked before, or
 VERIFY CONNECTIVITY on the Upload tab succeeds, this machine is already let
@@ -1012,7 +1013,7 @@ The same tool works against a plain Elastic stack
   Step by step: kibana dashboards\ELASTIC-SETUP.txt
 
 - UPLOAD TAB: host = the Elasticsearch IP, port 9200, the user from
-  ELASTIC-SETUP.txt. The Upload to ELK tab works the same on Security Onion
+  ELASTIC-SETUP.txt. The Upload tab works the same on Security Onion
   and on plain Elastic.
 
 - NO "Open in Kibana" LINK after an upload with the restricted account. That

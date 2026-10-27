@@ -208,7 +208,7 @@ function Update-TakajoReadiness {
     $path = $txtTjSource.Text.Trim()
     if (-not $path) {
         $script:TakajoKind = 'Missing'
-        $lblTjSource.Text = 'No timeline selected. Convert on the Hayabusa tab, or Browse to a Hayabusa results.jsonl.'
+        $lblTjSource.Text = 'No timeline selected. Convert on the Convert tab, or Browse to a Hayabusa results.jsonl.'
         $lblTjSource.Foreground = $script:TjMuted
         return
     }

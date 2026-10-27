@@ -188,7 +188,7 @@ $setXaml = @'
         <Button    Grid.Row="1" Grid.Column="2" x:Name="btnSetEvtx" Content="Browse..." Margin="8,0,0,0"/>
         <Button    Grid.Row="1" Grid.Column="3" x:Name="btnSetEvtxDefault" Content="Default" Margin="8,0,0,0"/>
         <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" Style="{DynamicResource Hint}" Margin="0,8,0,0"
-                   Text="Collect EVTX writes one folder per host here; Convert and Raw Events read from here. A change applies at once and is remembered."/>
+                   Text="The Collect tab writes one folder per host here; Convert and Raw Events read from here. A change applies at once and is remembered."/>
       </Grid>
     </Border>
 

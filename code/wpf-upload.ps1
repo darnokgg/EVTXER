@@ -80,7 +80,7 @@ $uploadXaml = @'
 
         <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="lblSource"
                    Style="{DynamicResource Hint}" Margin="0,8,0,0"
-                   Text="Nothing loaded. Convert on the Hayabusa tab, or Browse to an existing ecs.jsonl."/>
+                   Text="Nothing loaded. Convert on the Convert tab, or Browse to an existing ecs.jsonl."/>
       </Grid>
     </Border>
 
@@ -298,7 +298,7 @@ function Update-SourceReadiness {
     $path = $txtSource.Text.Trim()
     if (-not $path) {
         $script:SourceKind = 'Missing'
-        $lblSource.Text = 'Nothing loaded. Convert on the Hayabusa tab, or Browse to an existing ecs.jsonl.'
+        $lblSource.Text = 'Nothing loaded. Convert on the Convert tab, or Browse to an existing ecs.jsonl.'
         $lblSource.Foreground = $script:UpBrush.muted
         return
     }

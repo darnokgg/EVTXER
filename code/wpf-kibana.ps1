@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    "Kibana Dashboards" tab - WPF fragment, dot-sourced by HayabusaMissionTool.ps1.
+    "Dashboards" tab (Kibana dashboards) - WPF fragment, dot-sourced by HayabusaMissionTool.ps1.
 
 .DESCRIPTION
     Imports kibana\hayabusa-kibana-objects.ndjson (9 dashboards, 9 saved
@@ -91,7 +91,7 @@ $kibanaXaml = @'
       <StackPanel>
         <TextBlock Text="Security Onion connection" Style="{DynamicResource SectionHead}"/>
         <TextBlock Style="{DynamicResource Hint}"
-                   Text="This tab uses the host, username and password you typed on the 'Upload to ELK' tab. Fill them in there; they are read when you press a button here, so a correction on that tab takes effect immediately. Pin or Skip verification is chosen on that tab too."/>
+                   Text="This tab uses the host, username and password you typed on the Upload tab. Fill them in there; they are read when you press a button here, so a correction on that tab takes effect immediately. Pin or Skip verification is chosen on that tab too."/>
         <TextBlock x:Name="lblKbConn" Margin="0,8,0,0" Text="No host entered on the Upload tab yet."/>
 
         <!-- The Upload tab pins Elasticsearch on 9200. This tab talks to the
@@ -133,7 +133,7 @@ $kibanaXaml = @'
       <StackPanel>
         <TextBlock Text="After importing" Style="{DynamicResource SectionHead}"/>
         <TextBlock Style="{DynamicResource Hint}"
-                   Text="1. The dashboards stay EMPTY until an index whose name matches hayabusa-* exists and holds documents. That is what the 'Upload to ELK' tab creates; nothing on this tab uploads any data."/>
+                   Text="1. The dashboards stay EMPTY until an index whose name matches hayabusa-* exists and holds documents. That is what the Upload tab creates; nothing on this tab uploads any data."/>
         <TextBlock Style="{DynamicResource Hint}" Margin="0,6,0,0"
                    Text="2. Set the time picker (top right in Kibana) to a range that covers the events, for example 'Last 5 years'. EVTX records carry the time they happened on the host, not the time they were uploaded, so the default 'Last 15 minutes' shows nothing on a correct import."/>
         <TextBlock Style="{DynamicResource Hint}" Margin="0,6,0,0"
@@ -218,7 +218,7 @@ function Get-KibanaConnection {
         Reason   = if (-not $user -and $secret.Trim()) {
                        "The Upload tab holds an API key (no username). A key cannot import dashboards - enter a username and password there for this tab."
                    } elseif ($missing.Count) {
-                       "Fill in the $($missing -join ', ') on the 'Upload to ELK' tab first. This tab has no fields of its own on purpose - it uses that one connection."
+                       "Fill in the $($missing -join ', ') on the Upload tab first. This tab has no fields of its own on purpose - it uses that one connection."
                    } else { '' }
     }
 }
@@ -248,7 +248,7 @@ $btnKbFetch.Add_Click({
     $hostName = ''
     try { $hostName = $txtHost.Text.Trim() } catch { }
     if (-not $hostName) {
-        [void][System.Windows.MessageBox]::Show("Enter the host on the 'Upload to ELK' tab first.", 'Missing host')
+        [void][System.Windows.MessageBox]::Show("Enter the host on the Upload tab first.", 'Missing host')
         return
     }
     if (-not (Confirm-PcapBeforeNetwork 'fetch the Kibana certificate')) { return }

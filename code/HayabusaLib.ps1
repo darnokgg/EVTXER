@@ -1311,8 +1311,8 @@ function Get-PathGuide {
         'evtx\<host>_<timestamp>\   EVTX from the Collect tab. Drop your own EVTX here too.',
         '                           Any folder works, including a UNC share the partner staged.',
         'output\hayabusa\',
-        '  results.jsonl            raw Hayabusa timeline  ->  Takajo Analysis tab',
-        '  results.ecs.jsonl        ECS transform          ->  Upload to ELK',
+        '  results.jsonl            raw Hayabusa timeline  ->  Takajo tab',
+        '  results.ecs.jsonl        ECS transform          ->  Upload tab',
         '  results.csv              optional analyst copy, local only - never uploaded',
         '  jobs\<host>_<timestamp>\  the QUEUE''s results for each collected host (same files)',
         'output\takajo\             automagic results, HTML report and database',
@@ -1503,7 +1503,7 @@ function Get-JsonlKind([string]$Path, [int]$SampleLines = 5) {
                   ($names -notcontains '@timestamp')
         if ($hasRaw) {
             return @{ Kind = 'RawHayabusa'
-                      Reason = 'This is raw Hayabusa output, not the converted ECS file. Convert it on the Hayabusa tab first.' }
+                      Reason = 'This is raw Hayabusa output, not the converted ECS file. Convert it on the Convert tab first.' }
         }
     }
 
@@ -4490,8 +4490,8 @@ function Get-ReadinessPills {
         else { & $pill Mission $false 'No mission' 'Name the mission on the Settings tab - uploads wait for it.' }
         if ($ElkOk) { & $pill Elk $true 'ELK connected' "Verified: $ElkHost. Uploads can run." }
         else { & $pill Elk $false 'ELK not verified' 'Press VERIFY CONNECTIVITY on the Upload tab - uploads wait for it.' }
-        if ($SoReady) { & $pill So $true 'SO ready' "$SoHost, filled in on the Raw Events (SO) tab. The login itself is checked when an import runs." }
-        else { & $pill So $false 'SO not set' 'Fill in the Raw Events (SO) tab - host, user, password, host key. Only needed for raw imports.' }
+        if ($SoReady) { & $pill So $true 'SO ready' "$SoHost, filled in on the Raw Events tab. The login itself is checked when an import runs." }
+        else { & $pill So $false 'SO not set' 'Fill in the Raw Events tab - host, user, password, host key. Only needed for raw imports.' }
     )
 }
 
@@ -4499,7 +4499,7 @@ function Get-WhereToLook([ValidateSet('detections', 'raw')][string]$Kind) {
     # Said after an upload or a raw import (which data
     # shows in Security Onion and which only in Kibana was not obvious).
     if ($Kind -eq 'detections') {
-        return "Where to look: Kibana - Discover, or the Hayabusa dashboards (Kibana Dashboards tab). Detections are in their own index, so not in Security Onion's Hunt or Alerts."
+        return "Where to look: Kibana - Discover, or the Hayabusa dashboards (Dashboards tab). Detections are in their own index, so not in Security Onion's Hunt or Alerts."
     }
     return "Where to look: Security Onion's Hunt and Dashboards, and Kibana's Raw Events dashboards."
 }
@@ -4575,7 +4575,7 @@ function Get-GuideEntries {
         & $e 'Where data lands' $find "Why are my detections not in Security Onion's Hunt or Alerts?" (
             'Detections go into their own index, hayabusa-mission-<mission name>, so they can be dropped cleanly. ' +
             "Hunt and Alerts search only Security Onion's own indices. Look in Kibana: Discover, or the Hayabusa " +
-            'dashboards (the Kibana Dashboards tab imports them).')
+            'dashboards (the Dashboards tab imports them).')
         & $e 'Where data lands' $find 'Where do raw events land?' (
             "In Security Onion's own logs-import-so data stream: Hunt, Dashboards, and Kibana's Raw Events " +
             'dashboards. Security Onion only - a plain Elastic stack has no importer, so only detections go there.')

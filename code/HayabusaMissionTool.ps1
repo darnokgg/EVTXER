@@ -46,7 +46,7 @@ $script:AppRoot = Split-Path -Parent $script:ScriptPath
 $script:Root    = Split-Path -Parent $script:AppRoot
 if (-not $script:Root) { $script:Root = (Get-Location).Path }
 
-$script:ToolVersion = '75'
+$script:ToolVersion = '76'
 # The Settings tab can move the EVTX drop folder and the archive; both are
 # saved in code\settings.conf, beside importer.conf.
 $script:SettingsPath = Join-Path $script:AppRoot 'settings.conf'
@@ -588,14 +588,16 @@ $xaml = @'
 
       <TabControl x:Name="tabs" Grid.Column="0" Background="Transparent" BorderThickness="0,1,0,0"
                   BorderBrush="#4A525E" Padding="0,6,0,0">
-        <TabItem Header="Collect EVTX"><ScrollViewer x:Name="tabCollect" VerticalScrollBarVisibility="Auto"/></TabItem>
-        <TabItem Header="Convert (Hayabusa)"><ScrollViewer x:Name="tabConvert" VerticalScrollBarVisibility="Auto"/></TabItem>
-        <TabItem Header="Upload to ELK"><ScrollViewer x:Name="tabUpload" VerticalScrollBarVisibility="Auto"/></TabItem>
-        <TabItem Header="Takajo Analysis"><ScrollViewer x:Name="tabTakajo" VerticalScrollBarVisibility="Auto"/></TabItem>
-        <TabItem Header="Kibana Dashboards"><ScrollViewer x:Name="tabKibana" VerticalScrollBarVisibility="Auto"/></TabItem>
-        <TabItem Header="Raw Events (SO)"><ScrollViewer x:Name="tabSoImport" VerticalScrollBarVisibility="Auto"/></TabItem>
-        <TabItem Header="Settings"><ScrollViewer x:Name="tabSettings" VerticalScrollBarVisibility="Auto"/></TabItem>
-        <TabItem Header="Guide"><ScrollViewer x:Name="tabGuide" VerticalScrollBarVisibility="Auto"/></TabItem>
+        <!-- Short names fit one row (owner, 2026-10-26: two rows swapped places
+             when a tab in the other row was clicked); the full name is the tooltip. -->
+        <TabItem Header="Collect" ToolTip="Collect EVTX from remote hosts"><ScrollViewer x:Name="tabCollect" VerticalScrollBarVisibility="Auto"/></TabItem>
+        <TabItem Header="Convert" ToolTip="Convert: a Hayabusa scan, then ECS"><ScrollViewer x:Name="tabConvert" VerticalScrollBarVisibility="Auto"/></TabItem>
+        <TabItem Header="Upload" ToolTip="Upload to ELK (Elasticsearch)"><ScrollViewer x:Name="tabUpload" VerticalScrollBarVisibility="Auto"/></TabItem>
+        <TabItem Header="Takajo" ToolTip="Takajo analysis and reports"><ScrollViewer x:Name="tabTakajo" VerticalScrollBarVisibility="Auto"/></TabItem>
+        <TabItem Header="Dashboards" ToolTip="Kibana dashboards"><ScrollViewer x:Name="tabKibana" VerticalScrollBarVisibility="Auto"/></TabItem>
+        <TabItem Header="Raw Events" ToolTip="Raw events to Security Onion"><ScrollViewer x:Name="tabSoImport" VerticalScrollBarVisibility="Auto"/></TabItem>
+        <TabItem Header="Settings" ToolTip="This mission, then setup"><ScrollViewer x:Name="tabSettings" VerticalScrollBarVisibility="Auto"/></TabItem>
+        <TabItem Header="Guide" ToolTip="Cheat sheet, and a search over the README"><ScrollViewer x:Name="tabGuide" VerticalScrollBarVisibility="Auto"/></TabItem>
       </TabControl>
 
       <!-- The divider. A visible grip, because a transparent splitter is one
