@@ -57,7 +57,8 @@ $takajoXaml = @'
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="Auto"/>
           </Grid.ColumnDefinitions>
-          <TextBlock Grid.Column="0" Text="Timeline JSONL *" Margin="0,0,10,0"/>
+          <TextBlock Grid.Column="0" Text="Timeline JSONL *" Margin="0,0,10,0"
+                     ToolTip="Hayabusa's own results.jsonl (output\hayabusa), not the ecs.jsonl - Takajo reads Hayabusa's original fields."/>
           <TextBox   x:Name="txtTjSource" Grid.Column="1" Margin="0,0,8,0"/>
           <Button    x:Name="btnTjBrowse" Grid.Column="2" Content="Browse..." MinWidth="96"/>
         </Grid>
@@ -86,7 +87,8 @@ $takajoXaml = @'
           <TextBox   x:Name="txtTjOut" Grid.Row="0" Grid.Column="1" Margin="0,0,8,0"/>
           <Button    x:Name="btnTjOutBrowse" Grid.Row="0" Grid.Column="2" Content="Browse..." MinWidth="96"/>
 
-          <TextBlock Grid.Row="1" Grid.Column="0" Text="Minimum level" Margin="0,8,10,0"/>
+          <TextBlock Grid.Row="1" Grid.Column="0" Text="Minimum level" Margin="0,8,10,0"
+                     ToolTip="Detections below this level are left out of the CSV results. informational keeps everything; high keeps only high and critical."/>
           <ComboBox  x:Name="cmbTjLevel" Grid.Row="1" Grid.Column="1" Width="170"
                      HorizontalAlignment="Left" Margin="0,12,0,0"/>
 
@@ -130,7 +132,8 @@ $takajoXaml = @'
                      Margin="0,10,0,0"/>
 
           <CheckBox  x:Name="chkTjSqlite" Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2"
-                     Content="Use SQLite instead of DuckDB" IsChecked="True" Margin="0,10,0,0"/>
+                     Content="Use SQLite instead of DuckDB" IsChecked="True" Margin="0,10,0,0"
+                     ToolTip="The format of the database Takajo writes beside the report. SQLite opens in more tools (DB Browser for SQLite); leave it ticked unless you use DuckDB."/>
 
           <Button x:Name="btnTjReport" Grid.Row="0" Grid.RowSpan="3" Grid.Column="3"
                   Content="BUILD OFFLINE HTML" Style="{DynamicResource Primary}"
@@ -289,15 +292,15 @@ $btnTjBrowse.Add_Click({
 $txtTjSource.Add_LostFocus({ Update-TakajoReadiness })
 $txtTakajo.Add_LostFocus({ Update-TakajoReadiness })
 
-# WPF has no folder picker in .NET Framework, so the three folder browsers stay
-# on the WinForms dialog the shell already loads the assembly for.
+# Each button carries its box in Tag - no .GetNewClosure(), whose scope does
+# not see this script's functions.
 foreach ($pair in @(@($btnTjOutBrowse, $txtTjOut), @($btnTjHtmlBrowse, $txtTjHtml), @($btnTjRulesBrowse, $txtTjRules))) {
-    $btn = $pair[0]; $box = $pair[1]
-    $btn.Add_Click({
-        $d = New-Object System.Windows.Forms.FolderBrowserDialog
-        if ($box.Text -and (Test-Path -LiteralPath $box.Text)) { $d.SelectedPath = $box.Text }
-        if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $box.Text = $d.SelectedPath }
-    }.GetNewClosure())
+    $pair[0].Tag = $pair[1]
+    $pair[0].Add_Click({
+        param($s)
+        $p = Select-FolderPath 'Select a folder' $s.Tag.Text
+        if ($p) { $s.Tag.Text = $p }
+    })
 }
 
 $btnTjAutomagic.Add_Click({

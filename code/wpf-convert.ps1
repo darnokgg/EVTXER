@@ -35,7 +35,8 @@ $convertXaml = @'
         <!-- GroupName is explicit: the two radios sit in different StackPanels,
              and WPF only auto-groups radios that share a parent. -->
         <RadioButton x:Name="rbEvtx" GroupName="convertMode" IsChecked="True"
-                     Content="Scan an EVTX folder  (this tool runs Hayabusa with the correct flags)"/>
+                     Content="Scan an EVTX folder  (this tool runs Hayabusa with the correct flags)"
+                     ToolTip="Hayabusa reads every .evtx under the folder (subfolders too) and keeps the events a rule matches; then they are converted to ECS for the Upload tab. Collected hosts are done by the QUEUE below - this is for EVTX from anywhere else."/>
 
         <Grid Margin="20,6,0,0">
           <Grid.ColumnDefinitions>
@@ -49,7 +50,8 @@ $convertXaml = @'
             <RowDefinition Height="Auto"/>
           </Grid.RowDefinitions>
 
-          <TextBlock Grid.Row="0" Grid.Column="0" Text="EVTX folder *" Margin="0,0,8,0"/>
+          <TextBlock Grid.Row="0" Grid.Column="0" Text="EVTX folder *" Margin="0,0,8,0"
+                     ToolTip="Any local folder or share. Type or paste the path (quotes are fine), or Browse. A mapped drive letter is turned into its \\server\share path, because EVTXER runs as administrator and Windows hides your mapped drives from it."/>
           <TextBox   Grid.Row="0" Grid.Column="1" x:Name="txtEvtx" Margin="0,3"/>
           <Button    Grid.Row="0" Grid.Column="2" x:Name="btnEvtx" Content="Browse..." Margin="8,3,0,3"/>
 
@@ -62,7 +64,8 @@ $convertXaml = @'
         </Grid>
 
         <RadioButton x:Name="rbJsonl" GroupName="convertMode" Margin="0,14,0,0"
-                     Content="Use an existing Hayabusa JSONL  (from another machine, or an air-gapped scan)"/>
+                     Content="Use an existing Hayabusa JSONL  (from another machine, or an air-gapped scan)"
+                     ToolTip="Skip the scan: convert a results.jsonl that Hayabusa already wrote (JSONL, super-verbose profile, UTC) into ECS for the Upload tab."/>
 
         <Grid Margin="20,6,0,0">
           <Grid.ColumnDefinitions>
@@ -106,7 +109,8 @@ $convertXaml = @'
                      VerticalAlignment="Center" Text="Not converted yet."/>
         </Grid>
         <CheckBox x:Name="chkCsv" Margin="0,12,0,0" IsChecked="False"
-                  Content="Also write CSV (local analyst copy; upload still uses JSONL)"/>
+                  Content="Also write CSV (local analyst copy; upload still uses JSONL)"
+                  ToolTip="Runs Hayabusa a second time to write results.csv beside the JSONL, to open in Excel or Timeline Explorer. Doubles the scan time; nothing else uses the CSV."/>
       </StackPanel>
     </Border>
     <Border Style="{DynamicResource CardPanel}">
@@ -324,16 +328,15 @@ function Set-EvtxFolder([string]$Path, [switch]$Quiet) {
 }
 
 $btnEvtx.Add_Click({
-    # WinForms still, on purpose: WPF has no folder picker in .NET Framework.
-    $d = New-Object System.Windows.Forms.FolderBrowserDialog
-    $d.Description = 'Select the folder containing .evtx files'
-    $d.SelectedPath = if ($txtEvtx.Text -and (Test-Path -LiteralPath $txtEvtx.Text)) { $txtEvtx.Text } else { $script:Folders.Evtx }
-    if ($d.ShowDialog() -ne 'OK') { return }
-    [void](Set-EvtxFolder $d.SelectedPath -Quiet)
+    $p = Select-FolderPath 'Select the folder containing .evtx files' $(if ($txtEvtx.Text.Trim()) { $txtEvtx.Text } else { $script:Folders.Evtx })
+    if ($p) { [void](Set-EvtxFolder $p -Quiet) }
 })
 
 $btnConvert.Add_Click({
     if ($script:Busy) { return }
+    # Pasted with quotes, or a mapped drive this elevated window cannot see.
+    $txtEvtx.Text = Resolve-TypedPath $txtEvtx.Text
+    $txtSrc.Text  = Resolve-TypedPath $txtSrc.Text
     if ($rbEvtx.IsChecked -eq $true) {
         if (-not (Test-Path $txtEvtx.Text)) {
             [void][System.Windows.MessageBox]::Show('Choose the folder containing your .evtx files.', 'No folder'); return

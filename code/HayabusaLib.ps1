@@ -1064,12 +1064,119 @@ function Read-ToolSettings([string]$Path) {
     return $s
 }
 
+function Resolve-TypedPath([string]$Text, [string]$NetworkKey = 'HKCU:\Network') {
+    # A path as the operator pasted it, made usable. Explorer's "Copy as path"
+    # wraps it in quotes. And a drive letter mapped to a share (Z:\...) does not
+    # exist for EVTXER run as administrator - Windows keeps mapped drives per
+    # elevation - so it becomes the \\server\share it points at, read from the
+    # account's saved mapping (field, 2026-10-27: the share could not be picked
+    # or pasted). A mapping made without "Reconnect at sign-in" is not saved
+    # there; that one has to be typed as \\server\share.
+    $t = "$Text".Trim().Trim('"').Trim()
+    if ($t -match '^([A-Za-z]):(\\.*)?$' -and -not (Test-Path -LiteralPath "$($Matches[1]):\")) {
+        $rest = "$($Matches[2])"
+        try {
+            $unc = (Get-ItemProperty -LiteralPath (Join-Path $NetworkKey $Matches[1]) -ErrorAction Stop).RemotePath
+            if ($unc) { $t = $unc.TrimEnd('\') + $(if ($rest) { $rest } else { '\' }) }
+        } catch { }
+    }
+    return $t
+}
+
+function Select-FolderPath([string]$Title, [string]$Current) {
+    # The Explorer-style folder picker (address bar, Network, every drive), not
+    # WinForms' FolderBrowserDialog: that old tree has no address bar, so a
+    # share could be neither typed nor found in it (field, 2026-10-27). .NET
+    # Framework has no wrapper for this dialog, hence the COM interfaces.
+    # $null when cancelled.
+    if (-not ('EvtxerFolderPicker' -as [type])) {
+        Add-Type -ErrorAction Stop @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class EvtxerFolderPicker {
+    [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")]
+    class FileOpenDialog { }
+
+    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellItem {
+        void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+        void GetParent(out IShellItem ppsi);
+        void GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string ppszName);
+        void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
+        void Compare(IShellItem psi, uint hint, out int piOrder);
+    }
+
+    // IModalWindow::Show first, then IFileDialog in vtable order - up to
+    // GetResult, the last one used.
+    [ComImport, Guid("42f85136-db7e-439c-85f1-e4075d135fc8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IFileDialog {
+        [PreserveSig] int Show(IntPtr parent);
+        void SetFileTypes(uint cFileTypes, IntPtr rgFilterSpec);
+        void SetFileTypeIndex(uint iFileType);
+        void GetFileTypeIndex(out uint piFileType);
+        void Advise(IntPtr pfde, out uint pdwCookie);
+        void Unadvise(uint dwCookie);
+        void SetOptions(uint fos);
+        void GetOptions(out uint pfos);
+        void SetDefaultFolder(IShellItem psi);
+        void SetFolder(IShellItem psi);
+        void GetFolder(out IShellItem ppsi);
+        void GetCurrentSelection(out IShellItem ppsi);
+        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+        void GetFileName([MarshalAs(UnmanagedType.LPWStr)] out string pszName);
+        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
+        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
+        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);
+        void GetResult(out IShellItem ppsi);
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    static extern void SHCreateItemFromParsingName(string pszPath, IntPtr pbc, ref Guid riid, out IShellItem ppv);
+
+    [DllImport("user32.dll")]
+    static extern IntPtr GetActiveWindow();
+
+    const uint FOS_PICKFOLDERS = 0x20, FOS_FORCEFILESYSTEM = 0x40;
+    const uint SIGDN_FILESYSPATH = 0x80058000;
+
+    public static string Show(string title, string start) {
+        IFileDialog d = (IFileDialog)new FileOpenDialog();
+        try {
+            d.SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+            if (!String.IsNullOrEmpty(title)) { d.SetTitle(title); }
+            if (!String.IsNullOrEmpty(start)) {
+                try {
+                    Guid iid = typeof(IShellItem).GUID;
+                    IShellItem item;
+                    SHCreateItemFromParsingName(start, IntPtr.Zero, ref iid, out item);
+                    d.SetFolder(item);
+                } catch (Exception) { }
+            }
+            if (d.Show(GetActiveWindow()) != 0) { return null; }
+            IShellItem result;
+            d.GetResult(out result);
+            string path;
+            result.GetDisplayName(SIGDN_FILESYSPATH, out path);
+            return path;
+        } finally { Marshal.ReleaseComObject(d); }
+    }
+}
+"@
+    }
+    # Never opened at a share: asking a server that is down holds the window
+    # up. The picker's address bar takes one.
+    $start = Resolve-TypedPath $Current
+    if (-not $start -or $start -like '\\*' -or -not (Test-Path -LiteralPath $start)) { $start = '' }
+    return [EvtxerFolderPicker]::Show($Title, $start)
+}
+
 function ConvertTo-FolderSetting([string]$Text) {
     # A folder the Settings tab may use - D:\... or \\server\share\... - fully
     # resolved, or '' for anything else. IsPathRooted also passes "D:" and
     # "\x", which Windows resolves against the CURRENT folder: a drop folder of
     # D:\ trimmed to D: would quietly have become code\.
-    $t = "$Text".Trim()
+    $t = Resolve-TypedPath $Text
     if ($t -notmatch '^([A-Za-z]:\\|\\\\[^\\]+\\[^\\]+)') { return '' }
     try { $full = [IO.Path]::GetFullPath($t) } catch { return '' }
     if ($full -ne [IO.Path]::GetPathRoot($full)) { $full = $full.TrimEnd('\') }
@@ -3322,6 +3429,7 @@ function Convert-HayabusaJsonlToEcs {
                 $mark  = [Math]::Min([long][Math]::Floor($first / $index.Every), $index.Marks.Count - 1)
                 $jobs += [pscustomobject]@{
                     Part    = $partPath
+                    Done    = [long]0
                     Process = (Start-EcsWorker -Source $Source -PartPath $partPath -ImportId $ImportId `
                                    -EvtxDir $EvtxDir -HayabusaDir $HayabusaDir -Offset $index.Marks[$mark] `
                                    -Skip ($first - $mark * $index.Every) -Take $slice)
@@ -3330,8 +3438,14 @@ function Convert-HayabusaJsonlToEcs {
             while (@($jobs | Where-Object { -not $_.Process.HasExited }).Count) {
                 Start-Sleep -Milliseconds 50
                 if ($OnProgress -and -not $cancelled) {
+                    # A read that lands while the worker rewrites its .n file
+                    # gets "" (0) or a sharing error: keep the last good count,
+                    # or the bar and the number jump backwards (field, 1.1M).
                     $done = 0
-                    foreach ($j in $jobs) { try { $done += [long][IO.File]::ReadAllText("$($j.Part).n") } catch { } }
+                    foreach ($j in $jobs) {
+                        try { $j.Done = [Math]::Max($j.Done, [long][IO.File]::ReadAllText("$($j.Part).n")) } catch { }
+                        $done += $j.Done
+                    }
                     if (@(& $OnProgress $done $total) -contains $true) {
                         $cancelled = $true
                         foreach ($j in $jobs) { try { if (-not $j.Process.HasExited) { $j.Process.Kill() } } catch { } }
@@ -4198,6 +4312,24 @@ function Get-ArchiveCandidates([string]$EvtxRoot) {
             Label = "$($d.Name)   -   $($evtx.Count) .evtx, $(Format-ByteSize $bytes)"
         }
     })
+}
+
+function Get-QueueFolderChoices([string]$Path) {
+    # A folder picked with the queue's "From another folder..." (owner,
+    # 2026-10-27: EVTX in more than one place, without moving the drop
+    # folder). A folder holding .evtx itself is one machine and is offered as
+    # it is; otherwise its machine subfolders, as the drop folder offers them.
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return @() }
+    if (@(Get-ChildItem -LiteralPath $Path -Filter *.evtx -File -ErrorAction SilentlyContinue).Count) {
+        $evtx = @(Get-ArchiveFiles $Path | Where-Object { $_.Extension -eq '.evtx' })
+        $bytes = [long]($evtx | Measure-Object Length -Sum).Sum
+        $name = Split-Path -Leaf $Path
+        return @([pscustomobject]@{
+            Name = $name; Path = $Path; Files = $evtx.Count; Bytes = $bytes
+            Label = "$name   -   $($evtx.Count) .evtx, $(Format-ByteSize $bytes)   ($Path)"
+        })
+    }
+    return @(Get-ArchiveCandidates $Path | ForEach-Object { $_.Label += "   ($(Split-Path -Parent $_.Path))"; $_ })
 }
 
 function Get-ArchiveZipPath([string]$ArchiveRoot, [string]$Name) {
@@ -5356,6 +5488,11 @@ function Get-LongestRulePath([string]$RulesDir) {
     }
     return $max
 }
+
+# Get-LongestRulePath of the rules EVTXER ships (Hayabusa 4.2.0 rules, Oct
+# 2026). The launcher warns when its folder is too deep for this one; a Layout
+# test keeps it in step when the rules are re-copied.
+$script:DeepestShippedRule = 166
 
 function Test-RulesPathFits([string]$RulesDir, [int]$Longest, [int]$Margin = 15) {
     # Windows' 260-character limit, with room for the rules to grow deeper.

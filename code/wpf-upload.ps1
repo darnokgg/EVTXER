@@ -73,7 +73,8 @@ $uploadXaml = @'
                    Style="{DynamicResource Hint}" HorizontalAlignment="Right"
                    VerticalAlignment="Top"/>
 
-        <TextBlock Grid.Row="1" Grid.Column="0" Text="Source JSONL *" Margin="0,0,10,0"/>
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="Source JSONL *" Margin="0,0,10,0"
+                   ToolTip="The converted file to send: the ecs.jsonl the Convert tab writes (it is filled in here by itself after a conversion). Not Hayabusa's own results.jsonl - that one is for the Takajo tab."/>
         <TextBox   Grid.Row="1" Grid.Column="1" x:Name="txtSource"/>
         <Button    Grid.Row="1" Grid.Column="2" x:Name="btnSourceBrowse"
                    Content="Browse..." Margin="8,0,0,0"/>
@@ -105,7 +106,8 @@ $uploadXaml = @'
         <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
                    Text="Elasticsearch connection" Style="{DynamicResource SectionHead}"/>
 
-        <TextBlock Grid.Row="1" Grid.Column="0" Text="Host / IP *" Margin="0,0,10,6"/>
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="Host / IP *" Margin="0,0,10,6"
+                   ToolTip="The Security Onion manager (or Elasticsearch server) by IP or name. Port 9200 is Elasticsearch itself - on Security Onion its firewall must allow this machine on 9200."/>
         <Grid Grid.Row="1" Grid.Column="1" Margin="0,0,0,4">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
@@ -153,15 +155,19 @@ $uploadXaml = @'
              accept every certificate - encrypted, but authenticating nobody.
              Pinning needs no CA: it remembers the exact certificate and refuses
              any other. -->
-        <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,4,0,6">
+        <!-- Wraps: with their (?) marks the two no longer fit one line. -->
+        <WrapPanel Grid.Row="4" Grid.Column="1" Margin="0,4,0,6">
           <RadioButton x:Name="rbTlsPin" GroupName="upTls" IsChecked="True"
-                       Content="Pin the certificate fingerprint (recommended)"/>
+                       Content="Pin the certificate fingerprint (recommended)"
+                       ToolTip="EVTXER remembers this server's exact certificate (its SHA-256 fingerprint) and refuses to talk to any other. Press Fetch, compare the fingerprint with the server's admin once, and it is saved."/>
           <RadioButton x:Name="rbTlsSkip" GroupName="upTls" Margin="24,4,0,4"
                        Foreground="{DynamicResource Caution}"
-                       Content="Skip verification (no protection against an active MITM)"/>
-        </StackPanel>
+                       Content="Skip verification (no protection against an active MITM)"
+                       ToolTip="Still encrypted, but EVTXER does not check who answers - a machine in the middle could pose as the server and receive the password and the detections. For a lab only."/>
+        </WrapPanel>
 
-        <TextBlock Grid.Row="5" Grid.Column="0" Text="Fingerprint *" Margin="0,0,10,0"/>
+        <TextBlock Grid.Row="5" Grid.Column="0" Text="Fingerprint *" Margin="0,0,10,0"
+                   ToolTip="The SHA-256 of the server's certificate on this port. Fetch reads it from the server; check it once with whoever runs the server, then every later connection must show the same one."/>
         <Grid Grid.Row="5" Grid.Column="1">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
@@ -205,14 +211,16 @@ $uploadXaml = @'
         <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
                    Text="Target index" Style="{DynamicResource SectionHead}"/>
 
-        <TextBlock Grid.Row="1" Grid.Column="0" Text="Case / label" Margin="0,0,10,6"/>
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="Case / label" Margin="0,0,10,6"
+                   ToolTip="A short word for this batch (case42, dc01); Generate name turns it into an index name. With a mission name on the Settings tab you do not need it: the mission index is filled in instead."/>
         <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,4">
           <TextBox x:Name="txtLabel" Width="150"/>
           <Button  x:Name="btnGen" Content="Generate name" Margin="10,0,0,0"/>
           <TextBlock Text="e.g. case42, dc01" Style="{DynamicResource Hint}" Margin="10,0,0,0"/>
         </StackPanel>
 
-        <TextBlock Grid.Row="2" Grid.Column="0" Text="Index name *" Margin="0,0,10,0"/>
+        <TextBlock Grid.Row="2" Grid.Column="0" Text="Index name *" Margin="0,0,10,0"
+                   ToolTip="Where the detections are stored in Elasticsearch. To add more EVTX to an index later, upload into the same name again with Allow appending ticked (the mission index always takes more). A detection already there is never stored twice."/>
         <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal">
           <TextBox x:Name="txtIndex" Width="260"/>
           <Button  x:Name="btnCheck" Content="Check availability" Margin="10,0,0,0"/>
@@ -223,7 +231,8 @@ $uploadXaml = @'
                    Text="Verify connectivity, then generate a name."/>
 
         <CheckBox Grid.Row="4" Grid.Column="1" x:Name="chkAppend" Margin="0,8,0,0"
-                  Content="Allow appending to an index that already has documents"/>
+                  Content="Allow appending to an index that already has documents"
+                  ToolTip="Off: an index name that is already taken is refused, so a typo cannot mix two cases. On: this upload is added to that index - for more hosts of the same case. The mission index is always appended to. Detections already there are skipped, never doubled."/>
       </Grid>
     </Border>
     <Border Style="{DynamicResource CardPanel}">
@@ -236,7 +245,7 @@ $uploadXaml = @'
                after a newer conversion added fields. Never doubles either way. -->
           <CheckBox x:Name="chkRefresh" IsChecked="False" Margin="16,0,0,0" VerticalAlignment="Center"
                     Content="Update detections already in the index"
-                    ToolTip="Re-uploading after a newer conversion? Tick this so the stored detections get the new fields. Nothing is doubled either way."/>
+                    ToolTip="Off (normal): a detection already in the index - same event, same rule - is skipped and counted as 'already in index'. On: it is replaced by this upload's copy. Only for re-uploading the same logs after an EVTXER update changed the conversion. Nothing is ever stored twice either way."/>
         </StackPanel>
         <TextBlock x:Name="lblResult" Margin="0,12,0,0" Text="" TextWrapping="Wrap"/>
         <!-- Filled in after a successful upload with a link carrying the data

@@ -29,10 +29,8 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
-# Only for FolderBrowserDialog: WPF has no folder picker of its own in .NET
-# Framework, and the Vista-style dialog needs a Shell COM interop dance that
-# earns nothing here.
-Add-Type -AssemblyName System.Windows.Forms
+# Folders are picked with Select-FolderPath (the Explorer-style dialog, v78) -
+# WinForms' FolderBrowserDialog could not reach a share.
 
 . "$PSScriptRoot\HayabusaLib.ps1"
 . "$PSScriptRoot\EvtxCollector.ps1"
@@ -46,7 +44,7 @@ $script:AppRoot = Split-Path -Parent $script:ScriptPath
 $script:Root    = Split-Path -Parent $script:AppRoot
 if (-not $script:Root) { $script:Root = (Get-Location).Path }
 
-$script:ToolVersion = '77'
+$script:ToolVersion = '78'
 # The Settings tab can move the EVTX drop folder and the archive; both are
 # saved in code\settings.conf, beside importer.conf.
 $script:SettingsPath = Join-Path $script:AppRoot 'settings.conf'
@@ -151,6 +149,18 @@ $xaml = @'
       <Setter Property="Foreground" Value="{StaticResource Ink}"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
       <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+
+    <!-- Dark, like the window. Without it a tooltip kept Windows' pale box
+         while the TextBlock style above made its text white: every
+         explanation, the (?) ones included, was white on near-white (v78
+         review - found when the field asked what an option meant). -->
+    <Style TargetType="ToolTip">
+      <Setter Property="Background" Value="{StaticResource Surface}"/>
+      <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="10,6"/>
     </Style>
 
     <Style x:Key="Hint" TargetType="TextBlock">
@@ -1463,6 +1473,72 @@ foreach ($tabFile in 'wpf-collect.ps1', 'wpf-convert.ps1', 'wpf-upload.ps1', 'wp
     else { $missingTabs += $tabFile }
 }
 
+# ---- help marks ----
+# Field notes, 2026-10-27: a tooltip nobody knows is there explains nothing
+# ("Update detections already in the index - WHAT DOES THAT MEAN?"). Every
+# option a tab explains - a text ToolTip on a check box, radio button or
+# field label - gets a visible (?) after its text. Hovering either shows the
+# explanation; a click on the (?) shows it too, without ticking the box. The
+# explanations stay in each tab's XAML, beside the option they explain.
+function New-HelpText([string]$Text) {
+    $t = New-Object System.Windows.Controls.TextBlock
+    $t.Text = $Text; $t.TextWrapping = 'Wrap'; $t.MaxWidth = 420
+    return $t
+}
+function Add-HelpMarks($Node) {
+    foreach ($child in @([System.Windows.LogicalTreeHelper]::GetChildren($Node))) {
+        if ($child -is [System.Windows.DependencyObject]) { Add-HelpMarks $child }
+    }
+    $isOption = $Node -is [System.Windows.Controls.Primitives.ToggleButton] -and $Node.Content -is [string]
+    $isLabel  = $Node -is [System.Windows.Controls.TextBlock]
+    if (-not ($isOption -or $isLabel) -or -not ($Node.ToolTip -is [string]) -or -not $Node.ToolTip) { return }
+    $text = $Node.ToolTip
+
+    $q = New-Object System.Windows.Controls.TextBlock
+    $q.Text = '?'; $q.FontSize = 11; $q.FontWeight = 'Bold'
+    $q.HorizontalAlignment = 'Center'; $q.VerticalAlignment = 'Center'
+    $q.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'Accent')
+    $mark = New-Object System.Windows.Controls.Border
+    $mark.Width = 16; $mark.Height = 16; $mark.CornerRadius = 8; $mark.BorderThickness = 1
+    $mark.Margin = '6,0,0,0'; $mark.Cursor = [System.Windows.Input.Cursors]::Help
+    $mark.Background = [System.Windows.Media.Brushes]::Transparent
+    $mark.SetResourceReference([System.Windows.Controls.Border]::BorderBrushProperty, 'Accent')
+    $mark.Child = $q
+    $tip = New-Object System.Windows.Controls.ToolTip
+    $tip.Content = New-HelpText $text; $tip.StaysOpen = $false
+    $mark.ToolTip = $tip
+    # Handled here, so the check box under the mark never sees the click.
+    $mark.Add_MouseLeftButtonDown({
+        param($s, $e)
+        $e.Handled = $true
+        $s.ToolTip.PlacementTarget = $s
+        $s.ToolTip.IsOpen = $true
+    })
+    $Node.ToolTip = New-HelpText $text
+    foreach ($el in $Node, $mark) {
+        [System.Windows.Controls.ToolTipService]::SetShowDuration($el, 60000)
+        [System.Windows.Controls.ToolTipService]::SetShowOnDisabled($el, $true)
+    }
+    [System.Windows.Controls.ToolTipService]::SetInitialShowDelay($mark, 100)
+
+    $slot = New-Object System.Windows.Documents.InlineUIContainer $mark
+    $slot.BaselineAlignment = 'Center'
+    if ($isOption) {
+        # A TextBlock rather than the plain string: it wraps, and the mark
+        # sits after the last word.
+        $label = New-Object System.Windows.Controls.TextBlock
+        $label.TextWrapping = 'Wrap'
+        $label.Inlines.Add((New-Object System.Windows.Documents.Run $Node.Content))
+        $label.Inlines.Add($slot)
+        $Node.Content = $label
+    } else {
+        $Node.TextWrapping = 'Wrap'
+        $Node.Inlines.Add($slot)
+    }
+}
+try { Add-HelpMarks $win }
+catch { Write-Log "Could not add the (?) help marks: $($_.Exception.Message)`n" 'warn' }
+
 # Never open taller or wider than the screen: 1000px is most of a laptop at
 # 150% scaling, and a window whose bottom is off-screen hides its own buttons.
 $work = [System.Windows.SystemParameters]::WorkArea
@@ -1520,6 +1596,16 @@ $script:PcapTimer.Start()
 # window from a harness that supplied its own Show, so the one line the real
 # launch depends on was the one line nothing exercised.
 if ($missingTabs) { Write-Log "MISSING tab file(s) in code\: $($missingTabs -join ', ') - copy the whole code folder.`n" 'err' }
+# Too deep a folder for the rules (field, 2026-10-27): Windows' "Extract all"
+# skips every file past 260 characters, and Hayabusa then scans without those
+# rules and says nothing. Measured against the deepest rule EVTXER shipped,
+# not the deepest one present - the skipped ones are exactly the deepest.
+$rulesDir = Join-Path $script:AppRoot 'hayabusa-x64\rules'
+if (-not (Test-RulesPathFits $rulesDir $script:DeepestShippedRule -Margin 0)) {
+    $deep = "EVTXER is in too deep a folder: $script:Root is $($script:Root.Length) characters, and some Hayabusa rule files are then past Windows' 260-character limit. If this copy was unzipped with Windows' Extract all, those rules were SKIPPED and scans miss what they detect. Move the EVTXER folder (or unzip it again) to a short path such as C:\EVTXER."
+    Write-Log "$deep`n" 'err'
+    [void][System.Windows.MessageBox]::Show($deep, 'EVTXER folder too deep', 'OK', 'Warning')
+}
 Write-Log "EVTXER v$script:ToolVersion ready. Log file: $script:LogFile`n" 'info'
 # EVTXER is meant to run as administrator; the .cmd asks
 # for it. Said once here, and again under WinRM when that is picked.

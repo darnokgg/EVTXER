@@ -488,19 +488,25 @@ $btnQAdd.Add_Click({
         [void][System.Windows.MessageBox]::Show('Nothing is ticked to run by itself. Tick at least one step under the QUEUE heading first.', 'Job queue'); return
     }
     $free = @(Get-ArchiveCandidates $script:Folders.Evtx | Where-Object { -not (Test-QueueHoldsFolder $script:Jobs $_.Path) })
-    if (-not $free.Count) { [void][System.Windows.MessageBox]::Show("No host folders with .evtx in $($script:Folders.Evtx) that are not already queued.", 'Job queue'); return }
+    # A list the window can add to: "From another folder..." brings machine
+    # folders from anywhere, without moving the drop folder (owner,
+    # 2026-10-27: EVTX in more than one place).
+    $items = New-Object System.Collections.ObjectModel.ObservableCollection[object]
+    foreach ($f in $free) { $items.Add($f) }
     $pickXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Add host folders to the queue" Width="620" Height="420"
+        Title="Add host folders to the queue" Width="720" Height="460"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
         UseLayoutRounding="True" FontFamily="Segoe UI" FontSize="13" Background="#1E2126">
   <Grid Margin="16">
     <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
       <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
-    <ListBox x:Name="lstPick" SelectionMode="Multiple" Background="#1A1D22" BorderBrush="#333941" Foreground="#F2F2F2">
+    <TextBlock x:Name="lblPickHint" Foreground="#A9B1BA" TextWrapping="Wrap" Margin="0,0,0,8"/>
+    <ListBox Grid.Row="1" x:Name="lstPick" SelectionMode="Multiple" Background="#1A1D22" BorderBrush="#333941" Foreground="#F2F2F2">
       <ListBox.ItemTemplate>
         <DataTemplate>
           <CheckBox Focusable="False"
@@ -510,17 +516,40 @@ $btnQAdd.Add_Click({
         </DataTemplate>
       </ListBox.ItemTemplate>
     </ListBox>
-    <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
-      <Button x:Name="btnPickAll" Content="Select all" MinWidth="90"/>
-      <Button x:Name="btnPickOk" Content="QUEUE THEM" Style="{StaticResource Primary}" MinWidth="130" Margin="10,0,0,0"/>
-      <Button x:Name="btnPickCancel" Content="Cancel" MinWidth="80" Margin="10,0,0,0"/>
-    </StackPanel>
+    <DockPanel Grid.Row="2" Margin="0,12,0,0">
+      <Button DockPanel.Dock="Left" x:Name="btnPickOther" Content="From another folder..." MinWidth="160"
+              ToolTip="Machine folders from anywhere - another share, a USB disk - without changing the drop folder. Pick one machine's folder, or a folder holding several."/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <Button x:Name="btnPickAll" Content="Select all" MinWidth="90"/>
+        <Button x:Name="btnPickOk" Content="QUEUE THEM" Style="{StaticResource Primary}" MinWidth="130" Margin="10,0,0,0"/>
+        <Button x:Name="btnPickCancel" Content="Cancel" MinWidth="80" Margin="10,0,0,0"/>
+      </StackPanel>
+    </DockPanel>
   </Grid>
 </Window>
 '@
     $w = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader ([xml]$pickXaml)))
     $w.Owner = $win
-    $pick = $w.FindName('lstPick'); $pick.ItemsSource = $free
+    $pick = $w.FindName('lstPick'); $pick.ItemsSource = $items
+    $w.FindName('lblPickHint').Text = if ($free.Count) { "Machine folders in the drop folder, $($script:Folders.Evtx). Folders elsewhere: From another folder..." }
+                                      else { "Nothing new in the drop folder ($($script:Folders.Evtx)). Folders elsewhere: From another folder..." }
+    # Not a .GetNewClosure() block: that scope cannot see this script's
+    # functions. The window carries the list instead.
+    $w.Tag = @{ Pick = $pick; Items = $items }
+    $w.FindName('btnPickOther').Add_Click({
+        param($s)
+        $state = [System.Windows.Window]::GetWindow($s).Tag
+        $dir = Select-FolderPath 'A machine folder with .evtx, or a folder of machine folders' $script:Folders.Evtx
+        if (-not $dir) { return }
+        $found = @(Get-QueueFolderChoices $dir)
+        if (-not $found.Count) { [void][System.Windows.MessageBox]::Show("No .evtx in $dir or in its subfolders.", 'Job queue'); return }
+        foreach ($f in $found) {
+            if (Test-QueueHoldsFolder $script:Jobs $f.Path) { continue }
+            if (@($state.Items | Where-Object { $_.Path -eq $f.Path }).Count) { continue }
+            $state.Items.Add($f)
+            [void]$state.Pick.SelectedItems.Add($f)
+        }
+    })
     $chosen = @{ Ok = $false }
     $w.FindName('btnPickAll').Add_Click({ $pick.SelectAll() }.GetNewClosure())
     $w.FindName('btnPickOk').Add_Click({ $chosen.Ok = $true; $w.Close() }.GetNewClosure())

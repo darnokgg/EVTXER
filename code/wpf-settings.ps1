@@ -46,7 +46,8 @@ $setXaml = @'
           <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="Mission" Style="{DynamicResource SectionHead}"/>
-        <TextBlock Grid.Row="1" Grid.Column="0" Text="Mission name" Margin="0,0,10,0"/>
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="Mission name" Margin="0,0,10,0"
+                   ToolTip="Every upload of the mission goes into one index, hayabusa-mission-NAME - every day, every operator, the queue and the Upload tab alike. Keep the same name to keep adding hosts; a new name starts a new index."/>
         <TextBox   Grid.Row="1" Grid.Column="1" x:Name="txtMission"/>
         <Button    Grid.Row="1" Grid.Column="2" x:Name="btnMissionUse" Content="Use on the Upload tab" Margin="8,0,0,0"/>
         <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="lblMission" Style="{DynamicResource Hint}" Margin="0,8,0,0" TextWrapping="Wrap"/>
@@ -78,21 +79,26 @@ $setXaml = @'
         <TextBlock Grid.Row="0" Grid.ColumnSpan="4" Text="Accountability PCAP" Style="{DynamicResource SectionHead}"/>
         <TextBlock Grid.Row="1" Grid.ColumnSpan="4" Style="{DynamicResource Hint}" Margin="0,0,0,10"
                    Text="Capture your own traffic while EVTXER works, so every packet of the mission can be shown afterwards. Wireshark's dumpcap captures; every file is kept, a new one every 3 GB. The capture keeps running when EVTXER closes."/>
-        <TextBlock Grid.Row="2" Grid.Column="0" Text="Wireshark folder" Margin="0,0,10,0"/>
+        <TextBlock Grid.Row="2" Grid.Column="0" Text="Wireshark folder" Margin="0,0,10,0"
+                   ToolTip="Where Wireshark is installed (the folder holding dumpcap.exe). Found by itself on a normal install."/>
         <TextBox   Grid.Row="2" Grid.Column="1" x:Name="txtPcapWs"/>
         <Button    Grid.Row="2" Grid.Column="2" x:Name="btnPcapWs" Content="Browse..." Margin="8,0,0,0"/>
-        <TextBlock Grid.Row="3" Grid.Column="0" Text="Interface" Margin="0,8,10,0"/>
+        <TextBlock Grid.Row="3" Grid.Column="0" Text="Interface" Margin="0,8,10,0"
+                   ToolTip="The network card your mission traffic goes out on - the one with the address on the mission network."/>
         <ComboBox  Grid.Row="3" Grid.Column="1" x:Name="cmbPcapIf" Margin="0,8,0,0" DisplayMemberPath="Label"/>
         <Button    Grid.Row="3" Grid.Column="2" x:Name="btnPcapIfRefresh" Content="Refresh" Margin="8,8,0,0"/>
-        <TextBlock Grid.Row="4" Grid.Column="0" Text="PCAP folder" Margin="0,8,10,0"/>
+        <TextBlock Grid.Row="4" Grid.Column="0" Text="PCAP folder" Margin="0,8,10,0"
+                   ToolTip="Where the capture files go. Every file is kept, a new one every 3 GB - EVTXER warns when the disk runs low."/>
         <TextBox   Grid.Row="4" Grid.Column="1" x:Name="txtPcapDir" Margin="0,8,0,0"/>
         <Button    Grid.Row="4" Grid.Column="2" x:Name="btnPcapDir" Content="Browse..." Margin="8,8,0,0"/>
         <Button    Grid.Row="4" Grid.Column="3" x:Name="btnPcapDirDefault" Content="Default" Margin="8,8,0,0"/>
         <StackPanel Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,10,0,0">
           <CheckBox x:Name="chkPcapRemind"
-                    Content="Before every network action, ask 'Is accountability PCAP started?' (not while a capture runs)"/>
+                    Content="Before every network action, ask 'Is accountability PCAP started?' (not while a capture runs)"
+                    ToolTip="Before the first network action of a session (collect, verify, upload, import...), EVTXER asks whether to start the capture first. Untick it if you capture some other way."/>
           <CheckBox x:Name="chkPcapViewer" Margin="0,6,0,0"
-                    Content="Open Wireshark to watch it live when a capture starts (a viewer only - closing it does not stop the capture)"/>
+                    Content="Open Wireshark to watch it live when a capture starts (a viewer only - closing it does not stop the capture)"
+                    ToolTip="Opens Wireshark on the running capture so you can see packets moving. Only a viewer: the capture is dumpcap, and it keeps going when Wireshark is closed."/>
         </StackPanel>
         <StackPanel Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,12,0,0">
           <TextBlock x:Name="lblPcapStatus" TextWrapping="Wrap"/>
@@ -126,7 +132,8 @@ $setXaml = @'
         <TextBlock Grid.Row="0" Grid.ColumnSpan="4" Text="Archive" Style="{DynamicResource SectionHead}"/>
         <TextBlock Grid.Row="1" Grid.ColumnSpan="4" Style="{DynamicResource Hint}" Margin="0,0,0,10"
                    Text="Moves the raw EVTX out of the drop folder once they are processed: one zip per host folder, holding its .evtx and their manifest. The zip is written as .partial, every file is read back and checked by SHA-256, and only then is it renamed and the host folder deleted. A failure or Cancel leaves the host folder untouched."/>
-        <TextBlock Grid.Row="2" Grid.Column="0" Text="Archive folder" Margin="0,0,10,0"/>
+        <TextBlock Grid.Row="2" Grid.Column="0" Text="Archive folder" Margin="0,0,10,0"
+                   ToolTip="Where the verified zips of raw EVTX go (one per host). A local folder or a share - type or paste \\server\share\folder; a mapped drive letter is turned into that by itself."/>
         <TextBox   Grid.Row="2" Grid.Column="1" x:Name="txtSetArchive"/>
         <Button    Grid.Row="2" Grid.Column="2" x:Name="btnSetArchive" Content="Browse..." Margin="8,0,0,0"/>
         <Button    Grid.Row="2" Grid.Column="3" x:Name="btnSetArchiveDefault" Content="Default" Margin="8,0,0,0"/>
@@ -183,7 +190,8 @@ $setXaml = @'
           <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <TextBlock Grid.Row="0" Grid.ColumnSpan="4" Text="EVTX drop folder" Style="{DynamicResource SectionHead}"/>
-        <TextBlock Grid.Row="1" Grid.Column="0" Text="Folder" Margin="0,0,10,0"/>
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="Folder" Margin="0,0,10,0"
+                   ToolTip="Collect writes one folder per host here, and the queue's Add folders lists the host folders found here. For EVTX you already have (on a share, say), point this at the folder that holds one subfolder per host. Type or paste a share as \\server\share\folder; a mapped drive letter is turned into that by itself."/>
         <TextBox   Grid.Row="1" Grid.Column="1" x:Name="txtSetEvtx"/>
         <Button    Grid.Row="1" Grid.Column="2" x:Name="btnSetEvtx" Content="Browse..." Margin="8,0,0,0"/>
         <Button    Grid.Row="1" Grid.Column="3" x:Name="btnSetEvtxDefault" Content="Default" Margin="8,0,0,0"/>
@@ -209,7 +217,8 @@ $setXaml = @'
     <Border Style="{DynamicResource CardPanel}">
       <StackPanel>
         <TextBlock Text="Pop-up windows" Style="{DynamicResource SectionHead}"/>
-        <CheckBox x:Name="chkSetRunLog" Content="Open each job's run log in Notepad when the job finishes"/>
+        <CheckBox x:Name="chkSetRunLog" Content="Open each job's run log in Notepad when the job finishes"
+                  ToolTip="On: a Notepad window with the full run log pops up after each collection, conversion, upload or import. Off: nothing pops up; Logs folder (under the log) opens them all."/>
         <TextBlock Style="{DynamicResource Hint}" Margin="0,6,0,0" TextWrapping="Wrap"
                    Text="Every collection, conversion, upload and import writes a run log either way. With this off, nothing pops up: the log pane names the file, and Logs folder (under the log) opens them all. Remembered on this machine."/>
       </StackPanel>
@@ -303,11 +312,7 @@ function Set-ArchiveFolder([string]$Path) {
 }
 
 function Select-SettingsFolder([string]$Description, [string]$Current) {
-    $d = New-Object System.Windows.Forms.FolderBrowserDialog
-    $d.Description = $Description
-    if ($Current -and $Current -notlike '\\*' -and (Test-Path -LiteralPath $Current)) { $d.SelectedPath = $Current }
-    if ($d.ShowDialog() -ne 'OK') { return $null }
-    return $d.SelectedPath
+    return Select-FolderPath $Description $Current
 }
 
 # ============================================================ handlers =======

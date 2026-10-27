@@ -110,6 +110,27 @@ foreach ($tool in 'hayabusa-x64', 'takajo') {
         Assert-True ($notice -match "(?i)$name $([regex]::Escape($ver))") "NOTICE.txt names $name $ver"
     }
 }
+# ---- the too-deep-folder warning measures the rules that ship ----
+# Explorer's Extract all skipped the deepest rules in the field (2026-10-27);
+# the launcher warns against $script:DeepestShippedRule, so it must follow a
+# rules re-copy.
+$shippedRules = Join-Path $root 'code\hayabusa-x64\rules'
+if (Test-Path $shippedRules) {
+    . "$PSScriptRoot\..\code\HayabusaLib.ps1"
+    Assert-Equal $script:DeepestShippedRule (Get-LongestRulePath (Resolve-Path $shippedRules).Path) "DeepestShippedRule matches the deepest rule in code\hayabusa-x64\rules"
+}
+Assert-True ($src -match 'Test-RulesPathFits \$rulesDir \$script:DeepestShippedRule') "the launcher warns when its folder is too deep for the rules"
+Assert-True ($allSrc -notmatch 'FolderBrowserDialog\s*$|New-Object System\.Windows\.Forms\.FolderBrowserDialog') "folders are picked with Select-FolderPath, which can reach a share"
+
+# ---- options carry a visible (?) with their explanation (field, 2026-10-27) ----
+Assert-True ($src -match 'Add-HelpMarks \$win') "the shell adds the (?) marks once every tab is loaded"
+foreach ($opt in 'chkRefresh', 'chkAppend', 'rbTlsPin', 'rbTlsSkip', 'chkCsv', 'chkSkipCertCheck', 'chkPcapRemind', 'chkAutoUpload', 'chkAutoRaw') {
+    Assert-True ($src -match "(?s)x:Name=`"$opt`"[^>]*ToolTip=`"") "$opt explains itself (its (?) has something to show)"
+}
+foreach ($label in 'Mission name', 'Index name \*', 'Archive folder', 'Host key \*') {
+    Assert-True ($src -match "(?s)Text=`"$label`"[^>]*ToolTip=`"") "the '$label' label explains its field"
+}
+
 foreach ($gone in 'lib', 'assets') {
     Assert-True (-not (Test-Path (Join-Path $root $gone))) "no $gone\ folder is left in the root"
 }

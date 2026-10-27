@@ -54,19 +54,22 @@ $collectXaml = @'
         <StackPanel>
           <TextBlock x:Name="lblMethodHead" Style="{StaticResource SectionHead}" Text="Collection Method *"/>
 
-          <RadioButton x:Name="rbSmb" Content="SMB (port 445)" GroupName="method"/>
+          <RadioButton x:Name="rbSmb" Content="SMB (port 445)" GroupName="method"
+                       ToolTip="Copies the log files over the target's admin share, like opening it in Explorer. Needs file sharing (port 445) and an admin account on the target."/>
           <TextBlock x:Name="lblSmbCaption" Style="{StaticResource Hint}" Margin="24,3,0,0"/>
           <TextBlock x:Name="lblSmbCaution" Foreground="{StaticResource Caution}" FontSize="12"
                      Margin="24,3,0,12" TextWrapping="Wrap"/>
 
-          <RadioButton x:Name="rbWinRM" Content="WinRM (port 5985)" GroupName="method"/>
+          <RadioButton x:Name="rbWinRM" Content="WinRM (port 5985)" GroupName="method"
+                       ToolTip="PowerShell remoting: the target exports and compresses its own logs, then they are copied back. Needs WinRM on the target (port 5985) and an admin account. Traffic is encrypted by Windows."/>
           <TextBlock x:Name="lblWinRmCaption" Style="{StaticResource Hint}" Margin="24,3,0,12"/>
           <!-- What THIS PC still lacks for plain WinRM (Get-LocalWinRmProblems),
                shown as soon as WinRM is picked, not after VERIFY fails. -->
           <TextBlock x:Name="lblWinRmLocal" Foreground="{StaticResource Warn}" FontSize="12"
                      Margin="24,-6,0,12" TextWrapping="Wrap" Visibility="Collapsed"/>
 
-          <RadioButton x:Name="rbWinRMHttps" Content="WinRM over HTTPS (port 5986)" GroupName="method"/>
+          <RadioButton x:Name="rbWinRMHttps" Content="WinRM over HTTPS (port 5986)" GroupName="method"
+                       ToolTip="The same as WinRM, inside TLS on port 5986. Only for targets that have an HTTPS listener set up."/>
           <TextBlock x:Name="lblWinRmHttpsCaption" Style="{StaticResource Hint}" Margin="24,3,0,0"/>
           <!-- Live only under WinRM over HTTPS (the binding). Off by default:
                unticked, the certificate proves the target is
@@ -74,7 +77,8 @@ $collectXaml = @'
                targets need it ticked, and the refusal hint says so. -->
           <CheckBox x:Name="chkSkipCertCheck" Margin="24,6,0,0"
                     IsEnabled="{Binding IsChecked, ElementName=rbWinRMHttps}"
-                    Content="Skip certificate check (self-signed certificate or IP target)"/>
+                    Content="Skip certificate check (self-signed certificate or IP target)"
+                    ToolTip="Unticked, the target's certificate must be trusted by this PC and name the target as typed. Tick it for a self-signed certificate or a target typed as an IP - the traffic stays encrypted, but the target's identity is not proven."/>
           <!-- What a collection leaves on a target - measured on a test workstation,
                2026-10-20 (before/after snapshot): nothing else changed. -->
           <TextBlock Style="{StaticResource Hint}" Margin="0,12,0,0" TextWrapping="Wrap"
@@ -85,7 +89,8 @@ $collectXaml = @'
         <StackPanel>
           <TextBlock Style="{StaticResource SectionHead}" Text="Log Category"/>
 
-          <RadioButton x:Name="rbDfir" GroupName="cat" Content="DFIR (recommended default)" IsChecked="True"/>
+          <RadioButton x:Name="rbDfir" GroupName="cat" Content="DFIR (recommended default)" IsChecked="True"
+                       ToolTip="The logs incident responders use - Security, System, PowerShell, Sysmon, Defender and the like. Small and fast; Show all lists every one."/>
           <StackPanel x:Name="pnlDfirLogs" Margin="24,6,0,12">
             <TextBlock x:Name="lblDfirLogs"/>
             <TextBlock x:Name="lblDfirCol1" Style="{StaticResource Hint}" Margin="0,4,0,0"/>
@@ -94,12 +99,14 @@ $collectXaml = @'
                     ToolTip="The DFIR preset's full list of logs - the same list COLLECT pulls"/>
           </StackPanel>
 
-          <RadioButton x:Name="rbAll" Content="All" GroupName="cat"/>
+          <RadioButton x:Name="rbAll" Content="All" GroupName="cat"
+                       ToolTip="Every .evtx on the host. Often 2-20+ GB per host, and most of it is hardware and diagnostic noise; scanning takes much longer."/>
           <TextBlock x:Name="lblAllWarning" Foreground="{StaticResource Warn}" FontSize="12"
                      Margin="24,3,0,12" TextWrapping="Wrap"
                      Text="ALL pulls every .evtx on the host - expect 2-20+ GB per host."/>
 
-          <RadioButton x:Name="rbCustom" Content="Custom" GroupName="cat"/>
+          <RadioButton x:Name="rbCustom" Content="Custom" GroupName="cat"
+                       ToolTip="Pick the logs yourself from a list; click a name to read what it is for."/>
 
 
           <!-- The notes sit UNDER the list, not beside it. Beside it they took
@@ -143,7 +150,8 @@ $collectXaml = @'
         <!-- One field decides the account prefix, because HOST\user versus
              DOMAIN\user was the most common collection failure. Empty means
              off-domain: each target logs in as TARGET\user. -->
-        <TextBlock x:Name="lblCredDomain" Grid.Row="1" Grid.Column="0" Text="Domain" Margin="0,0,12,8"/>
+        <TextBlock x:Name="lblCredDomain" Grid.Row="1" Grid.Column="0" Text="Domain" Margin="0,0,12,8"
+                   ToolTip="Filled in: every target logs in as DOMAIN\user. Empty: each target logs in as TARGET\user - a local account on that machine (workgroup)."/>
         <TextBox   x:Name="txtCredDomain" Grid.Row="1" Grid.Column="1" Margin="0,0,12,8"/>
         <TextBlock Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Style="{StaticResource Hint}" Margin="6,0,0,8"
                    Text="CORP or corp.local - or type user@corp.local as the username. Empty for workgroup targets."

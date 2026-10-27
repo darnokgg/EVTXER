@@ -7,6 +7,18 @@ stack - Security Onion or a plain Elastic stack (tested on 8.7 and 9).
 
 Everything needed is in this folder. No Python, no installer, no internet.
 
+UNZIPPING: keep the folder SHORT. Some Hayabusa rule files sit 190
+characters deep inside EVTXER, and Windows' own "Extract all" stops at 260
+("Error 0x80010135: Path too long"). Its suggested destination repeats the
+zip's name as one more folder, which is enough to go over. Extract to C:\
+(or delete the last folder name from the suggested destination), or use
+7-Zip. Press Cancel, not Skip, if the error appears: Skip leaves those rules
+out, and Hayabusa then quietly detects less. EVTXER warns at startup when
+its folder is too deep.
+
+Every option with a (?) beside it explains itself: hover over it, or click
+the (?).
+
 
 RUN IT
 ------
@@ -23,8 +35,10 @@ WinRM TrustedHosts list (and puts the list back afterwards). Refused, EVTXER
 still starts and says so: SMB and WinRM over HTTPS work without it. Two
 things to know about running elevated:
   - A drive letter mapped as the normal user (Z:\ etc.) is not visible to an
-    elevated program. Give share folders (Archive, EVTX drop folder) as
-    \\server\share\... paths instead.
+    elevated program. EVTXER turns a typed or pasted Z:\... into the
+    \\server\share\... it maps to, if the mapping reconnects at sign-in;
+    otherwise type the \\server\share\... path. Browse... takes one in its
+    address bar too, and lists shares under Network.
   - Plain WinRM also needs this PC's WinRM service running
     (as administrator: Start-Service WinRM). The Collect tab says so when
     WinRM is picked.
@@ -599,7 +613,8 @@ Buttons: Move up / Move down / Run next (to the top: it runs as soon as the
 step running now finishes), Retry (a failed job starts again at the step that
 failed), Cancel (stops the running job), Remove (takes a job off the list -
 its files stay), Clear done, Add folders... (queue host folders already in
-the drop folder, e.g. copied in from a USB stick), Open log (everything the
+the drop folder, e.g. copied in from a USB stick - or, with "From another
+folder...", from anywhere else), Open log (everything the
 selected job's steps printed), Hide.
 
 Each job writes its own results, never anyone else's:
@@ -612,6 +627,21 @@ again at that same step the next time EVTXER opens. Every step is safe to
 run again: Hayabusa and ECS rewrite that job's own files, the upload refuses a
 detection it already holds, Security Onion skips a file it already has, and
 the archive zips whatever is still there.
+
+EVTX you already have (no collection - a share, a USB disk): the queue works
+the same. Settings tab, EVTX drop folder: point it at the folder that holds
+ONE SUBFOLDER PER HOST, each with that host's .evtx (loose .evtx with no host
+folder are not offered). Then Add folders..., Select all, QUEUE THEM. EVTX
+in more than one place: in the same window, "From another folder..." adds
+machine folders from anywhere else - pick one machine's folder, or a folder
+holding several - without changing the drop folder. With
+Convert and Upload ticked, every host is scanned, converted and uploaded to
+the mission index (Security Onion's Elasticsearch) by itself; tick Raw import
+to SO as well to send every raw event too. The Convert tab never uploads by
+itself - after it, press UPLOAD on the Upload tab.
+
+Adding more hosts later: same mission name, Add folders... again. They go
+into the same index; detections already there are skipped, never doubled.
 
 The first network step of a session asks the accountability PCAP question
 once for the whole queue (see ACCOUNTABILITY PCAP).

@@ -52,7 +52,8 @@ $soXaml = @'
         <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
                    Text="Security Onion manager (SSH)" Style="{DynamicResource SectionHead}"/>
 
-        <TextBlock Grid.Row="1" Grid.Column="0" Text="Manager host / IP *" Margin="0,9,10,6" VerticalAlignment="Top"/>
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="Manager host / IP *" Margin="0,9,10,6" VerticalAlignment="Top"
+                   ToolTip="The Security Onion manager, reached over SSH. Its own so-import-evtx tool imports every raw event (not just detections) into Security Onion."/>
         <WrapPanel Grid.Row="1" Grid.Column="1" Margin="0,0,0,4">
           <TextBox x:Name="txtSoHost" Width="260" Margin="0,0,14,4"/>
           <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
@@ -61,7 +62,8 @@ $soXaml = @'
           </StackPanel>
         </WrapPanel>
 
-        <TextBlock Grid.Row="2" Grid.Column="0" Text="Username *" Margin="0,9,10,6" VerticalAlignment="Top"/>
+        <TextBlock Grid.Row="2" Grid.Column="0" Text="Username *" Margin="0,9,10,6" VerticalAlignment="Top"
+                   ToolTip="An SSH account on the manager that may use sudo - so-import-evtx needs it. The password is used for both and never appears on a command line or in a log."/>
         <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,4">
         <!-- Wraps: in a narrow window the password moves under the
              username instead of being squeezed off the edge. -->
@@ -88,7 +90,8 @@ $soXaml = @'
         </DockPanel>
         </StackPanel>
 
-        <TextBlock Grid.Row="3" Grid.Column="0" Text="Host key *" Margin="0,0,10,6"/>
+        <TextBlock Grid.Row="3" Grid.Column="0" Text="Host key *" Margin="0,0,10,6"
+                   ToolTip="The manager's SSH fingerprint. Fetch reads it; check it once with the admin. After that EVTXER refuses any server that shows a different one."/>
         <Grid Grid.Row="3" Grid.Column="1" Margin="0,0,0,4">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
@@ -122,7 +125,8 @@ $soXaml = @'
         </Grid.RowDefinitions>
         <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3"
                    Text="EVTX to import" Style="{DynamicResource SectionHead}"/>
-        <TextBlock Grid.Row="1" Grid.Column="0" Text="Folder *" Margin="0,0,10,0"/>
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="Folder *" Margin="0,0,10,0"
+                   ToolTip="Every .evtx under this folder is copied to the manager and imported. Any local folder or share; type or paste the path, or Browse. A mapped drive letter is turned into its \\server\share path."/>
         <TextBox   Grid.Row="1" Grid.Column="1" x:Name="txtSoFolder"/>
         <Button    Grid.Row="1" Grid.Column="2" x:Name="btnSoBrowse" Content="Browse..." Margin="8,0,0,0"/>
         <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="lblSoFiles" Margin="0,8,0,0"
@@ -224,6 +228,7 @@ function Invoke-SoPlink([string]$Label, [string]$Command, [string]$PasswordFile,
 }
 
 function Update-SoFiles {
+    $txtSoFolder.Text = Resolve-TypedPath $txtSoFolder.Text
     $files = @(Get-SoImportFiles $txtSoFolder.Text.Trim())
     if (-not $txtSoFolder.Text.Trim()) {
         $lblSoFiles.Text = 'Choose the folder the Collect tab filled (one subfolder per host), or any folder of .evtx.'
@@ -241,11 +246,9 @@ function Update-SoFiles {
 
 # ============================================================ handlers =======
 $btnSoBrowse.Add_Click({
-    $d = New-Object System.Windows.Forms.FolderBrowserDialog
-    $d.Description = 'Select the folder holding the .evtx files to import'
-    $d.SelectedPath = if ($txtSoFolder.Text -and (Test-Path -LiteralPath $txtSoFolder.Text)) { $txtSoFolder.Text } else { $script:Folders.Evtx }
-    if ($d.ShowDialog() -ne 'OK') { return }
-    $txtSoFolder.Text = $d.SelectedPath
+    $p = Select-FolderPath 'Select the folder holding the .evtx files to import' $(if ($txtSoFolder.Text.Trim()) { $txtSoFolder.Text } else { $script:Folders.Evtx })
+    if (-not $p) { return }
+    $txtSoFolder.Text = $p
     [void](Update-SoFiles)
 })
 $txtSoFolder.Add_LostFocus({ [void](Update-SoFiles) })

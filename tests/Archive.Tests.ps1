@@ -30,6 +30,24 @@ foreach ($bad in 'D:', 'D:evtx', '\evtx', 'evtx', '\\nas', '\\nas\', '', 'D:\a|b
     Assert-Equal (ConvertTo-FolderSetting $bad) '' "'$bad' is refused - it would resolve against the current folder, or is not a path"
 }
 
+# ---- a pasted path is made usable (field, 2026-10-27) ----
+# Explorer's "Copy as path" adds quotes; a drive mapped to a share does not
+# exist for EVTXER run as administrator, so it becomes the share it maps.
+Assert-Equal (ConvertTo-FolderSetting '"\\nas\share\case1"') '\\nas\share\case1' "the quotes of Copy as path are dropped"
+Assert-Equal (Resolve-TypedPath ' "C:\Windows" ')         'C:\Windows'         "and the spaces around them"
+$letter = [char[]]([int][char]'Z'..[int][char]'H') | Where-Object { -not (Test-Path -LiteralPath "${_}:\") } | Select-Object -First 1
+$netKey = "HKCU:\Software\EVTXER-test-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+try {
+    New-Item -Path (Join-Path $netKey $letter) -Force | Out-Null
+    Set-ItemProperty -LiteralPath (Join-Path $netKey $letter) -Name RemotePath -Value '\\fileserver\logs'
+    Assert-Equal (Resolve-TypedPath "${letter}:\site1\evtx" $netKey) '\\fileserver\logs\site1\evtx' "a mapped drive this window cannot see becomes its share"
+    Assert-Equal (Resolve-TypedPath "${letter}:\" $netKey)          '\\fileserver\logs\'           "its root too"
+    Assert-Equal (Resolve-TypedPath "${letter}:" $netKey)           '\\fileserver\logs\'           "and the bare letter"
+    Assert-Equal (Resolve-TypedPath 'C:\Windows' $netKey)           'C:\Windows'                   "a drive that exists is left alone"
+} finally { Remove-Item -LiteralPath $netKey -Recurse -Force -ErrorAction SilentlyContinue }
+$unmapped = [char[]]([int][char]'H'..[int][char]'Z') | Where-Object { -not (Test-Path -LiteralPath "${_}:\") } | Select-Object -First 1
+Assert-Equal (Resolve-TypedPath "${unmapped}:\x" 'HKCU:\Software\EVTXER-no-such-key') "${unmapped}:\x" "a letter with no saved mapping is left for the caller to refuse"
+
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("archive-{0}" -f [guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 
@@ -76,6 +94,25 @@ try {
     Assert-Equal $c[0].Files 2 "with their file count"
     Assert-Equal $c[0].Bytes ([long]3000000) "and their size"
     Assert-Equal @(Get-ArchiveCandidates (Join-Path $tmp 'nope')).Count 0 "a missing drop folder offers nothing"
+
+    # ---- the queue's "From another folder..." (owner, 2026-10-27) ----
+    $c = @(Get-QueueFolderChoices $h1)
+    Assert-Equal $c.Count 1 "one machine's own folder is offered as it is"
+    Assert-Equal $c[0].Path $h1 "by its own path"
+    Assert-Equal $c[0].Files 2 "with its .evtx counted"
+    Assert-True ($c[0].Label -like "*($h1)") "and its location shown, since it is not the drop folder"
+    $site = Join-Path $tmp 'siteB'
+    New-HostFolder $site 'DC01' 1 1000 | Out-Null
+    New-HostFolder $site 'WS07' 1 1000 | Out-Null
+    $c = @(Get-QueueFolderChoices $site)
+    Assert-Equal (($c | ForEach-Object Name) -join ',') 'DC01,WS07' "a folder of machine folders offers each machine, as the drop folder does"
+    Assert-True ($c[0].Label -like "*($site)") "each with where it is"
+    # .evtx of its own make a folder one machine - the scan reads its
+    # subfolders too, so nothing in it is left out.
+    $c = @(Get-QueueFolderChoices $drop)
+    Assert-Equal "$($c.Count) $($c[0].Path)" "1 $drop" "a folder holding .evtx itself is one machine, subfolders and all"
+    Assert-Equal @(Get-QueueFolderChoices (Join-Path $drop 'empty')).Count 0 "a folder with no .evtx offers nothing"
+    Assert-Equal @(Get-QueueFolderChoices (Join-Path $tmp 'nope')).Count 0 "nor does a missing one"
 
     # ---- a host folder becomes one verified zip, and leaves the drop folder ----
     $arch = Join-Path $tmp 'archive'

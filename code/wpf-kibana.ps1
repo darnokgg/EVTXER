@@ -74,7 +74,8 @@ $kibanaXaml = @'
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="Auto"/>
           </Grid.ColumnDefinitions>
-          <TextBlock Grid.Column="0" Text="Objects file *" Margin="0,0,10,0"/>
+          <TextBlock Grid.Column="0" Text="Objects file *" Margin="0,0,10,0"
+                     ToolTip="The dashboards to import (an .ndjson export). The one for Security Onion is filled in by itself from the kibana dashboards folder."/>
           <TextBox   x:Name="txtKbFile" Grid.Column="1" Margin="0,0,8,0"/>
           <Button    x:Name="btnKbBrowse" Grid.Column="2" Content="Browse..." MinWidth="96"/>
         </Grid>
@@ -103,7 +104,8 @@ $kibanaXaml = @'
             <ColumnDefinition Width="*"/>
             <ColumnDefinition Width="Auto"/>
           </Grid.ColumnDefinitions>
-          <TextBlock Grid.Column="0" Text="Web UI fingerprint" Margin="0,0,10,0"/>
+          <TextBlock Grid.Column="0" Text="Web UI fingerprint" Margin="0,0,10,0"
+                     ToolTip="The SHA-256 of the certificate on the web page (port 443) - a different one from the Upload tab's Elasticsearch pin. Fetch, check once, and it is saved."/>
           <TextBox   x:Name="txtKbPin" Grid.Column="1" Margin="0,0,8,0"/>
           <Button    x:Name="btnKbFetch" Grid.Column="2" Content="Fetch" MinWidth="96"/>
         </Grid>
