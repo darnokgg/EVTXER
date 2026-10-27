@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src=".github/images/evtxer-window.png" width="860" alt="The EVTXER window: seven tabs, the collection options and the job queue">
+  <img src=".github/images/evtxer-window.png" width="860" alt="The EVTXER window: eight tabs, the status pills, the collection options and the job queue">
 </p>
 
 EVTXER is a Windows tool for incident responders and threat hunters. It pulls
