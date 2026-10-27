@@ -633,8 +633,9 @@ the same. Settings tab, EVTX drop folder: point it at the folder that holds
 ONE SUBFOLDER PER HOST, each with that host's .evtx (loose .evtx with no host
 folder are not offered). Then Add folders..., Select all, QUEUE THEM. EVTX
 in more than one place: in the same window, "From another folder..." adds
-machine folders from anywhere else - pick one machine's folder, or a folder
-holding several - without changing the drop folder. With
+machine folders from anywhere else - pick machine folders (Ctrl-click for
+several at once), or folders that each hold several - without changing the
+drop folder; press it again for another location. With
 Convert and Upload ticked, every host is scanned, converted and uploaded to
 the mission index (Security Onion's Elasticsearch) by itself; tick Raw import
 to SO as well to send every raw event too. The Convert tab never uploads by

@@ -44,7 +44,7 @@ $script:AppRoot = Split-Path -Parent $script:ScriptPath
 $script:Root    = Split-Path -Parent $script:AppRoot
 if (-not $script:Root) { $script:Root = (Get-Location).Path }
 
-$script:ToolVersion = '78'
+$script:ToolVersion = '79'
 # The Settings tab can move the EVTX drop folder and the archive; both are
 # saved in code\settings.conf, beside importer.conf.
 $script:SettingsPath = Join-Path $script:AppRoot 'settings.conf'
@@ -1504,15 +1504,20 @@ function Add-HelpMarks($Node) {
     $mark.Background = [System.Windows.Media.Brushes]::Transparent
     $mark.SetResourceReference([System.Windows.Controls.Border]::BorderBrushProperty, 'Accent')
     $mark.Child = $q
-    $tip = New-Object System.Windows.Controls.ToolTip
-    $tip.Content = New-HelpText $text; $tip.StaysOpen = $false
-    $mark.ToolTip = $tip
+    # Hover: a plain tooltip. The click opens a ToolTip of its own: WPF
+    # refuses a ToolTip with StaysOpen=False in a ToolTip property - every
+    # hover threw (v78 in the field) - and StaysOpen=False is what lets a
+    # click elsewhere close the clicked one.
+    $mark.ToolTip = New-HelpText $text
+    $mark.Tag = $text
     # Handled here, so the check box under the mark never sees the click.
     $mark.Add_MouseLeftButtonDown({
         param($s, $e)
         $e.Handled = $true
-        $s.ToolTip.PlacementTarget = $s
-        $s.ToolTip.IsOpen = $true
+        $tip = New-Object System.Windows.Controls.ToolTip
+        $tip.Content = New-HelpText $s.Tag
+        $tip.PlacementTarget = $s; $tip.Placement = 'Bottom'; $tip.StaysOpen = $false
+        $tip.IsOpen = $true
     })
     $Node.ToolTip = New-HelpText $text
     foreach ($el in $Node, $mark) {

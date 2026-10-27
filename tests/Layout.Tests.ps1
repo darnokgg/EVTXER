@@ -124,6 +124,10 @@ Assert-True ($allSrc -notmatch 'FolderBrowserDialog\s*$|New-Object System\.Windo
 
 # ---- options carry a visible (?) with their explanation (field, 2026-10-27) ----
 Assert-True ($src -match 'Add-HelpMarks \$win') "the shell adds the (?) marks once every tab is loaded"
+# v78 in the field: a ToolTip with StaysOpen=False in a ToolTip property
+# threw on every hover. Only the click's own ToolTip may set it.
+Assert-True ($src -cnotmatch '\.ToolTip\s*=\s*\$tip\b') "no ToolTip object is put in a ToolTip property (StaysOpen=False there throws on hover)"
+Assert-True ($src -match '\$tip\.PlacementTarget = \$s') "the (?) click opens a ToolTip of its own"
 foreach ($opt in 'chkRefresh', 'chkAppend', 'rbTlsPin', 'rbTlsSkip', 'chkCsv', 'chkSkipCertCheck', 'chkPcapRemind', 'chkAutoUpload', 'chkAutoRaw') {
     Assert-True ($src -match "(?s)x:Name=`"$opt`"[^>]*ToolTip=`"") "$opt explains itself (its (?) has something to show)"
 }

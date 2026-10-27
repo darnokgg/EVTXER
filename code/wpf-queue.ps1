@@ -518,7 +518,7 @@ $btnQAdd.Add_Click({
     </ListBox>
     <DockPanel Grid.Row="2" Margin="0,12,0,0">
       <Button DockPanel.Dock="Left" x:Name="btnPickOther" Content="From another folder..." MinWidth="160"
-              ToolTip="Machine folders from anywhere - another share, a USB disk - without changing the drop folder. Pick one machine's folder, or a folder holding several."/>
+              ToolTip="Machine folders from anywhere - another share, a USB disk - without changing the drop folder. Pick machine folders (Ctrl-click for several), or folders that each hold several. Press it again for another location."/>
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
         <Button x:Name="btnPickAll" Content="Select all" MinWidth="90"/>
         <Button x:Name="btnPickOk" Content="QUEUE THEM" Style="{StaticResource Primary}" MinWidth="130" Margin="10,0,0,0"/>
@@ -539,10 +539,12 @@ $btnQAdd.Add_Click({
     $w.FindName('btnPickOther').Add_Click({
         param($s)
         $state = [System.Windows.Window]::GetWindow($s).Tag
-        $dir = Select-FolderPath 'A machine folder with .evtx, or a folder of machine folders' $script:Folders.Evtx
-        if (-not $dir) { return }
-        $found = @(Get-QueueFolderChoices $dir)
-        if (-not $found.Count) { [void][System.Windows.MessageBox]::Show("No .evtx in $dir or in its subfolders.", 'Job queue'); return }
+        # Several at once with Ctrl-click (owner: "I can only select one
+        # folder at a time").
+        $dirs = Select-FolderPath 'Machine folders with .evtx, or folders of machine folders - Ctrl-click to pick several' $script:Folders.Evtx -Multiple
+        if (-not $dirs) { return }
+        $found = @(foreach ($dir in $dirs) { Get-QueueFolderChoices $dir })
+        if (-not $found.Count) { [void][System.Windows.MessageBox]::Show("No .evtx in $($dirs -join ', ') or in their subfolders.", 'Job queue'); return }
         foreach ($f in $found) {
             if (Test-QueueHoldsFolder $script:Jobs $f.Path) { continue }
             if (@($state.Items | Where-Object { $_.Path -eq $f.Path }).Count) { continue }

@@ -1083,12 +1083,12 @@ function Resolve-TypedPath([string]$Text, [string]$NetworkKey = 'HKCU:\Network')
     return $t
 }
 
-function Select-FolderPath([string]$Title, [string]$Current) {
+function Select-FolderPath([string]$Title, [string]$Current, [switch]$Multiple) {
     # The Explorer-style folder picker (address bar, Network, every drive), not
     # WinForms' FolderBrowserDialog: that old tree has no address bar, so a
     # share could be neither typed nor found in it (field, 2026-10-27). .NET
     # Framework has no wrapper for this dialog, hence the COM interfaces.
-    # $null when cancelled.
+    # $null when cancelled; with -Multiple, every folder picked (Ctrl-click).
     if (-not ('EvtxerFolderPicker' -as [type])) {
         Add-Type -ErrorAction Stop @"
 using System;
@@ -1107,10 +1107,21 @@ public static class EvtxerFolderPicker {
         void Compare(IShellItem psi, uint hint, out int piOrder);
     }
 
-    // IModalWindow::Show first, then IFileDialog in vtable order - up to
-    // GetResult, the last one used.
-    [ComImport, Guid("42f85136-db7e-439c-85f1-e4075d135fc8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    interface IFileDialog {
+    [ComImport, Guid("b63ea76d-1f85-456f-a19c-48159efa858b"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellItemArray {
+        void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppvOut);
+        void GetPropertyStore(int flags, ref Guid riid, out IntPtr ppv);
+        void GetPropertyDescriptionList(IntPtr keyType, ref Guid riid, out IntPtr ppv);
+        void GetAttributes(int attribFlags, uint sfgaoMask, out uint psfgaoAttribs);
+        void GetCount(out uint pdwNumItems);
+        void GetItemAt(uint dwIndex, out IShellItem ppsi);
+        void EnumItems(out IntPtr ppenumShellItems);
+    }
+
+    // IModalWindow::Show first, then IFileDialog and IFileOpenDialog in
+    // vtable order - every method, since GetResults comes last.
+    [ComImport, Guid("d57c7288-d4ad-4768-be02-9d969532d960"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IFileOpenDialog {
         [PreserveSig] int Show(IntPtr parent);
         void SetFileTypes(uint cFileTypes, IntPtr rgFilterSpec);
         void SetFileTypeIndex(uint iFileType);
@@ -1129,6 +1140,14 @@ public static class EvtxerFolderPicker {
         void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
         void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);
         void GetResult(out IShellItem ppsi);
+        void AddPlace(IShellItem psi, int fdap);
+        void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string pszDefaultExtension);
+        void Close(int hr);
+        void SetClientGuid(ref Guid guid);
+        void ClearClientData();
+        void SetFilter(IntPtr pFilter);
+        void GetResults(out IShellItemArray ppenum);
+        void GetSelectedItems(out IShellItemArray ppsai);
     }
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
@@ -1137,13 +1156,13 @@ public static class EvtxerFolderPicker {
     [DllImport("user32.dll")]
     static extern IntPtr GetActiveWindow();
 
-    const uint FOS_PICKFOLDERS = 0x20, FOS_FORCEFILESYSTEM = 0x40;
+    const uint FOS_PICKFOLDERS = 0x20, FOS_FORCEFILESYSTEM = 0x40, FOS_ALLOWMULTISELECT = 0x200;
     const uint SIGDN_FILESYSPATH = 0x80058000;
 
-    public static string Show(string title, string start) {
-        IFileDialog d = (IFileDialog)new FileOpenDialog();
+    public static string[] Show(string title, string start, bool multiple) {
+        IFileOpenDialog d = (IFileOpenDialog)new FileOpenDialog();
         try {
-            d.SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+            d.SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | (multiple ? FOS_ALLOWMULTISELECT : 0));
             if (!String.IsNullOrEmpty(title)) { d.SetTitle(title); }
             if (!String.IsNullOrEmpty(start)) {
                 try {
@@ -1154,11 +1173,17 @@ public static class EvtxerFolderPicker {
                 } catch (Exception) { }
             }
             if (d.Show(GetActiveWindow()) != 0) { return null; }
-            IShellItem result;
-            d.GetResult(out result);
-            string path;
-            result.GetDisplayName(SIGDN_FILESYSPATH, out path);
-            return path;
+            IShellItemArray results;
+            d.GetResults(out results);
+            uint n;
+            results.GetCount(out n);
+            string[] paths = new string[n];
+            for (uint i = 0; i < n; i++) {
+                IShellItem item;
+                results.GetItemAt(i, out item);
+                item.GetDisplayName(SIGDN_FILESYSPATH, out paths[i]);
+            }
+            return paths;
         } finally { Marshal.ReleaseComObject(d); }
     }
 }
@@ -1168,7 +1193,10 @@ public static class EvtxerFolderPicker {
     # up. The picker's address bar takes one.
     $start = Resolve-TypedPath $Current
     if (-not $start -or $start -like '\\*' -or -not (Test-Path -LiteralPath $start)) { $start = '' }
-    return [EvtxerFolderPicker]::Show($Title, $start)
+    $picked = [EvtxerFolderPicker]::Show($Title, $start, [bool]$Multiple)
+    if (-not $picked) { return $null }
+    if ($Multiple) { return , [string[]]$picked }
+    return $picked[0]
 }
 
 function ConvertTo-FolderSetting([string]$Text) {
