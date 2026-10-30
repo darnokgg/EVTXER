@@ -45,7 +45,7 @@ Assert-True ($upload -match '\$script:ConnKey\s*-ne\s*\(Get-UploadConnKey\)')   
 # connection too, or the unattended queue would upload under the old trust.
 Assert-True ($upload -match '(?s)function Get-UploadConnKey \{.*?rbTlsSkip.*?txtPin') "and so is a change of certificate trust"
 $queue = Get-Content "$PSScriptRoot\..\code\wpf-queue.ps1" -Raw
-Assert-True ($queue -match "(?s)if \(\`$step -eq 'upload'\) \{.*?Set-TlsTrustFromUi") "a queued upload puts back the Upload tab's trust before it starts"
+Assert-True ($queue -match "(?s)if \(\`$step -in 'upload', 'raw'\) \{.*?Set-TlsTrustFromUi") "a queued upload or raw-event step puts back the Upload tab's trust before it starts"
 # The trust is process-wide: a queued upload starting during a Dashboards
 # import must not take away the 443 pin that import is using.
 $m = [regex]::Match($upload, '(?s)function Set-TlsTrustFromUi \{.*?\n\}')

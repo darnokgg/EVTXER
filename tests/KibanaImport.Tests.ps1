@@ -223,22 +223,56 @@ Assert-Equal (Get-NdjsonObjectCount '') 0 "an empty path counts zero"
 # The real file. 109 objects is what kibana\IMPORT.txt promises the operator.
 $shipped = Join-Path (Split-Path -Parent $PSScriptRoot) 'kibana\hayabusa-kibana-objects.ndjson'
 if (Test-Path -LiteralPath $shipped) {
-    Assert-Equal (Get-NdjsonObjectCount $shipped) 171 "the shipped ndjson holds the 171 objects IMPORT.txt promises"
+    Assert-Equal (Get-NdjsonObjectCount $shipped) 221 "the shipped ndjson holds the 221 objects IMPORT.txt promises"
     $importTxt = Join-Path (Split-Path -Parent $PSScriptRoot) 'kibana\IMPORT.txt'
-    Assert-True ((Get-Content -LiteralPath $importTxt -Raw) -match '\b171\b') "IMPORT.txt promises the same 171"
-    # The raw-event hunting dashboard (2026-10-16) reads Security Onion's raw
-    # imports: its own data view, timed by event.created (SO 2.4 files imports
-    # under the import time), and every one of its panels on that data view.
+    Assert-True ((Get-Content -LiteralPath $importTxt -Raw) -match '\b221\b' -and (Get-Content -LiteralPath $importTxt -Raw) -notmatch '\b182\b') "IMPORT.txt promises the same 221"
+    # v81: the raw-event dashboards read EVTXER's own raw events
+    # (hayabusa-raw-*), timed by @timestamp - when the event happened - and
+    # the detections' data view leaves that index out, or every detection
+    # dashboard would count raw events.
     foreach ($f in $shipped, ($shipped -replace '\.ndjson$', '-8.7.ndjson')) {
         $all = @(Get-Content -LiteralPath $f -Encoding UTF8 | ForEach-Object { $_ | ConvertFrom-Json })
         $rawDv = @($all | Where-Object { $_.id -eq 'hayabusa-raw-dataview' })
         Assert-Equal $rawDv.Count 1 "$(Split-Path -Leaf $f): the raw-events data view is there"
-        Assert-Equal $rawDv[0].attributes.timeFieldName 'event.created' "$(Split-Path -Leaf $f): timed by when the event happened"
+        Assert-Equal $rawDv[0].attributes.title 'hayabusa-raw-*' "$(Split-Path -Leaf $f): on EVTXER's raw index"
+        Assert-Equal $rawDv[0].attributes.timeFieldName '@timestamp' "$(Split-Path -Leaf $f): timed by when the event happened"
+        $detDv = @($all | Where-Object { $_.id -eq 'hayabusa-evtx-dataview' })[0]
+        Assert-Equal $detDv.attributes.title 'hayabusa-*,-hayabusa-raw-*' "$(Split-Path -Leaf $f): the detections' data view leaves the raw events out"
+        $evDv = @($all | Where-Object { $_.id -eq 'hayabusa-everything-dataview' })
+        Assert-True ($evDv.Count -eq 1 -and $evDv[0].attributes.title -eq 'hayabusa-*' -and $evDv[0].attributes.name -eq 'Mission - everything') "$(Split-Path -Leaf $f): and 'Mission - everything' reads both"
         $dash = @($all | Where-Object { $_.id -eq 'hayabusa-raw-hunt-dashboard' })
-        $lens = @($all | Where-Object { $_.type -eq 'lens' -and $_.id -like 'hayabusa-raw-*' -and $_.id -notlike 'hayabusa-raw-anomaly-*' })
-        Assert-True ($dash.Count -eq 1 -and $lens.Count -eq 25) "$(Split-Path -Leaf $f): the raw hunt dashboard and its 25 panels"
-        Assert-Equal @($lens | Where-Object { @($_.references | Where-Object { $_.id -ne 'hayabusa-raw-dataview' }).Count }).Count 0 `
+        $topics = 'hayabusa-raw-anomaly-*', 'hayabusa-raw-lateral-*', 'hayabusa-raw-ad-*', 'hayabusa-raw-persist-*'
+        $allRaw = @($all | Where-Object { $_.type -eq 'lens' -and $_.id -like 'hayabusa-raw-*' })
+        $lens = @($allRaw | Where-Object { $id = $_.id; -not @($topics | Where-Object { $id -like $_ }).Count })
+        Assert-True ($dash.Count -eq 1 -and $lens.Count -eq 29) "$(Split-Path -Leaf $f): the raw hunt dashboard and its 29 panels (4 Kerberos)"
+        Assert-Equal @($allRaw | Where-Object { @($_.references | Where-Object { $_.id -ne 'hayabusa-raw-dataview' }).Count }).Count 0 `
             "$(Split-Path -Leaf $f): every raw panel reads the raw data view, none the detections"
+        # v82: the topic dashboards (scripts\make_raw_topic_dashboards.py),
+        # each with its own panels, every one of them on the dashboard.
+        foreach ($t in @(@('lateral', 9), @('ad', 11), @('persist', 16))) {
+            $td = @($all | Where-Object { $_.id -eq "hayabusa-raw-$($t[0])-dashboard" })
+            $tl = @($allRaw | Where-Object { $_.id -like "hayabusa-raw-$($t[0])-*" })
+            Assert-True ($td.Count -eq 1 -and $tl.Count -eq $t[1] -and @($td[0].references | Where-Object { $_.type -eq 'lens' }).Count -eq $t[1]) `
+                "$(Split-Path -Leaf $f): 'Raw Events' $($t[0]) dashboard and its $($t[1]) panels"
+        }
+        # Kibana's KQL cannot escape a space (in a value or a field name) - the
+        # panel draws a syntax error. Lucene accepts it, so only a render or
+        # this check catches it.
+        Assert-Equal @($allRaw | Where-Object { $_.attributes.state.query.query -match '\\ ' }).Count 0 `
+            "$(Split-Path -Leaf $f): no raw panel's KQL escapes a space"
+        # Elasticsearch 8.7's wildcard matches NOTHING when an escaped
+        # backslash follows a literal character or is followed by a *
+        # (*AppData\\* or *\\* - 0 hits, on 9.x they work): outside quotes,
+        # every \\ sits between a * and a letter.
+        $bs = @($all | Where-Object { $_.type -eq 'lens' } | Where-Object {
+            ($_.attributes.state.query.query -replace '"(?:[^"\\]|\\.)*"', '""') -match '(?<![*\\])\\\\|\\\\\*' })
+        Assert-Equal (@($bs | ForEach-Object { $_.id }) -join ', ') '' "$(Split-Path -Leaf $f): no panel's wildcard has a backslash after a letter (ES 8.7 finds nothing)"
+        Assert-True ((Get-Content -LiteralPath $f -Raw) -notmatch 'logs-import-so|event\.created|winlog\.computer_name|userdata\.') "$(Split-Path -Leaf $f): nothing left of Security Onion's importer fields"
+        $tl = @($all | Where-Object { $_.id -eq 'hayabusa-mission-timeline-dashboard' })
+        $tlLens = @($all | Where-Object { $_.type -eq 'lens' -and $_.id -like 'hayabusa-timeline-*' })
+        Assert-True ($tl.Count -eq 1 -and $tlLens.Count -eq 4) "$(Split-Path -Leaf $f): the Mission timeline dashboard and its 4 panels"
+        Assert-Equal @($tlLens | Where-Object { @($_.references | Where-Object { $_.id -ne 'hayabusa-everything-dataview' }).Count }).Count 0 `
+            "$(Split-Path -Leaf $f): every timeline panel reads 'Mission - everything'"
     }
     # The Anomaly Hunt dashboards (2026-10-17): each on its own data view, and
     # that data view carrying every op.* field scripts\anomaly_runtime_fields.py

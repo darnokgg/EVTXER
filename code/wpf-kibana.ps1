@@ -3,9 +3,9 @@
     "Dashboards" tab (Kibana dashboards) - WPF fragment, dot-sourced by HayabusaMissionTool.ps1.
 
 .DESCRIPTION
-    Imports kibana\hayabusa-kibana-objects.ndjson (9 dashboards, 9 saved
-    searches, 151 Lens panels, 2 data views) into the Kibana that Security Onion
-    fronts with its Kratos auth proxy.
+    Imports kibana\hayabusa-kibana-objects.ndjson (the dashboards, saved
+    searches, Lens panels and data views - kibana\IMPORT.txt counts them) into
+    the Kibana that Security Onion fronts with its Kratos auth proxy.
 
     The whole difficulty is the proxy. Plain basic auth against /kibana returns
     the LOGIN PAGE, not Kibana, and the reply still has status 200 - so a naive
@@ -139,7 +139,7 @@ $kibanaXaml = @'
         <TextBlock Style="{DynamicResource Hint}" Margin="0,6,0,0"
                    Text="2. Set the time picker (top right in Kibana) to a range that covers the events, for example 'Last 5 years'. EVTX records carry the time they happened on the host, not the time they were uploaded, so the default 'Last 15 minutes' shows nothing on a correct import."/>
         <TextBlock Style="{DynamicResource Hint}" Margin="0,6,0,0"
-                   Text="3. 'Raw Events - PEAK Hunt (Security Onion)' and 'Raw Events - Anomaly Hunt (Security Onion)' are the exception: they read EVERY raw event the 'Raw Events (SO)' tab sends to Security Onion, not hayabusa-*, and open on all time."/>
+                   Text="3. The 'Raw Events' dashboards (PEAK Hunt, Anomaly Hunt, Lateral Movement, Active Directory, Persistence &amp; Evasion) read EVERY raw event EVTXER sent to hayabusa-raw-*, not only the detections, and open on all time."/>
         <TextBlock Style="{DynamicResource Hint}" Margin="0,6,0,0"
                    Text="4. The two 'Anomaly Hunt' dashboards look for what 'rarest first' misses: only on one machine, new lately, odd hours (UTC), wrong place, bursts, fan-out, longest command lines. On real machines start with their sections 4, 6 and 7."/>
         <TextBlock Style="{DynamicResource Hint}" Margin="0,6,0,0"

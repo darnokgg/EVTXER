@@ -120,10 +120,15 @@ def as_ip(value):
     if v in EMPTY or v == "::":
         return None
     try:
-        ipaddress.ip_address(v)
-        return v
+        ip = ipaddress.ip_address(v)
     except ValueError:
         return None
+    # IPv4-mapped (::ffff:10.1.2.3, how Kerberos and logon events write it):
+    # the plain IPv4, so one source IP matches across event types. Same as
+    # ConvertTo-PlainIp in HayabusaLib.ps1.
+    if ip.version == 6 and ip.ipv4_mapped:
+        return str(ip.ipv4_mapped)
+    return v
 
 
 def scalarize(value):

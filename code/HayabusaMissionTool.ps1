@@ -44,7 +44,7 @@ $script:AppRoot = Split-Path -Parent $script:ScriptPath
 $script:Root    = Split-Path -Parent $script:AppRoot
 if (-not $script:Root) { $script:Root = (Get-Location).Path }
 
-$script:ToolVersion = '80'
+$script:ToolVersion = '82'
 # The Settings tab can move the EVTX drop folder and the archive; both are
 # saved in code\settings.conf, beside importer.conf.
 $script:SettingsPath = Join-Path $script:AppRoot 'settings.conf'
@@ -552,12 +552,7 @@ $xaml = @'
             <TextBlock x:Name="lblPillElk" Style="{StaticResource PillText}" Text="ELK not verified"/>
           </StackPanel>
         </Border>
-        <Border x:Name="pnlPillSo" Style="{StaticResource Pill}">
-          <StackPanel Orientation="Horizontal">
-            <Ellipse x:Name="dotPillSo" Style="{StaticResource PillDot}"/>
-            <TextBlock x:Name="lblPillSo" Style="{StaticResource PillText}" Text="SO not set"/>
-          </StackPanel>
-        </Border>
+
         <Border x:Name="pnlPcap" Style="{StaticResource Pill}">
           <StackPanel Orientation="Horizontal">
             <Ellipse x:Name="dotPcap" Style="{StaticResource PillDot}"/>
@@ -605,7 +600,7 @@ $xaml = @'
         <TabItem Header="Upload" ToolTip="Upload to ELK (Elasticsearch)"><ScrollViewer x:Name="tabUpload" VerticalScrollBarVisibility="Auto"/></TabItem>
         <TabItem Header="Takajo" ToolTip="Takajo analysis and reports"><ScrollViewer x:Name="tabTakajo" VerticalScrollBarVisibility="Auto"/></TabItem>
         <TabItem Header="Dashboards" ToolTip="Kibana dashboards"><ScrollViewer x:Name="tabKibana" VerticalScrollBarVisibility="Auto"/></TabItem>
-        <TabItem Header="Raw Events" ToolTip="Raw events to Security Onion"><ScrollViewer x:Name="tabSoImport" VerticalScrollBarVisibility="Auto"/></TabItem>
+
         <TabItem Header="Settings" ToolTip="This mission, then setup"><ScrollViewer x:Name="tabSettings" VerticalScrollBarVisibility="Auto"/></TabItem>
         <TabItem Header="Guide" ToolTip="Cheat sheet, and a search over the README"><ScrollViewer x:Name="tabGuide" VerticalScrollBarVisibility="Auto"/></TabItem>
       </TabControl>
@@ -721,11 +716,11 @@ $win    = [Windows.Markup.XamlReader]::Load($reader)
 
 # Every x:Name becomes a variable of the same name, so handler code reads the
 # same as it did against WinForms controls.
-foreach ($name in @('tabs','tabCollect','tabConvert','tabUpload','tabTakajo','tabKibana','tabSoImport','tabSettings','tabGuide',
+foreach ($name in @('tabs','tabCollect','tabConvert','tabUpload','tabTakajo','tabKibana','tabSettings','tabGuide',
                     'log','bar','lblStatus','lblVersion',
                     'colLog','btnCancel','chkConsole',
                     'pnlBusy','spinner','lblBusy','pnlPcap','dotPcap','lblPcap','pnlPillMission','dotPillMission','lblPillMission',
-                    'pnlPillElk','dotPillElk','lblPillElk','pnlPillSo','dotPillSo','lblPillSo','btnLedger','btnLedgerExport','btnNetworkLog','btnLogsFolder',
+                    'pnlPillElk','dotPillElk','lblPillElk','btnLedger','btnLedgerExport','btnNetworkLog','btnLogsFolder',
                     'rowQueue','splitQueue','queueHost')) {
     Set-Variable -Name $name -Scope Script -Value $win.FindName($name)
 }
@@ -886,7 +881,7 @@ function Stop-UiJob {
 # spinner ever stops, that is the place to add an Invoke-UiPump.
 function Set-AppBusy([bool]$On, [string]$What = '') {
     $script:Busy = $On
-    foreach ($t in @($tabCollect, $tabConvert, $tabUpload, $tabTakajo, $tabKibana, $tabSoImport, $tabSettings)) {
+    foreach ($t in @($tabCollect, $tabConvert, $tabUpload, $tabTakajo, $tabKibana, $tabSettings)) {
         if ($t -and $t.Content) { $t.Content.IsEnabled = -not $On }
     }
     $rotate = $spinner.RenderTransform
@@ -979,18 +974,17 @@ function Update-PcapPill {
     }
 }
 
-# Mission, ELK, SO: the same facts the queue waits on (Get-QueueBlockers),
-# read from the tabs - cheap, so every tick.
+# Mission, ELK: the same facts the queue waits on (Get-QueueBlockers), read
+# from the tabs - cheap, so every tick.
 function Update-ReadyPills {
     try {
         # Each tab's fact on its own: a tab that failed to load (already in
         # the log) greys only its own pill, the others still agree with the queue.
-        $elkOk = $false; $soReady = $false
+        $elkOk = $false
         try { $elkOk = [bool]($script:ConnOk -and $script:ConnKey -eq (Get-UploadConnKey)) } catch { }
-        try { $soReady = [bool](Test-SoReady) } catch { }
         $pills = Get-ReadinessPills -MissionName $script:Settings.MissionName `
                      -MissionIndex (Get-MissionIndexName $script:Settings.MissionName) `
-                     -ElkOk $elkOk -ElkHost "$($txtHost.Text)".Trim() -SoReady $soReady -SoHost "$($txtSoHost.Text)".Trim()
+                     -ElkOk $elkOk -ElkHost "$($txtHost.Text)".Trim()
         foreach ($p in $pills) {
             Set-PillLook (Get-Variable "pnlPill$($p.Key)" -ValueOnly) (Get-Variable "dotPill$($p.Key)" -ValueOnly) `
                          (Get-Variable "lblPill$($p.Key)" -ValueOnly) $(if ($p.On) { 'ok' } else { 'off' }) $p.Text "$($p.Tip) Click to open that tab."
@@ -1007,7 +1001,6 @@ function Update-ReadyPills {
 $pnlPcap.Add_MouseLeftButtonUp({ $tabs.SelectedItem = $tabSettings.Parent })
 $pnlPillMission.Add_MouseLeftButtonUp({ $tabs.SelectedItem = $tabSettings.Parent })
 $pnlPillElk.Add_MouseLeftButtonUp({ $tabs.SelectedItem = $tabUpload.Parent })
-$pnlPillSo.Add_MouseLeftButtonUp({ $tabs.SelectedItem = $tabSoImport.Parent })
 
 # ------------------------------------------------------- activity ledger ---
 # See Add-LedgerRows. logs\, beside the mission logs, outside code\ so a
@@ -1100,17 +1093,19 @@ function Invoke-ExternalTool {
     # directory is the caller's to choose: Takajo resolves conf/ and
     # templates/ against it.
     param([string]$Label, [string]$Exe, [string[]]$Arguments, [string]$WorkDir, [string]$Detail,
-          # Written to the program's stdin (sudo's password for the Raw Events
-          # tab). Forces the in-window pump: a console window could not be fed.
+          # Written to the program's stdin. Forces the in-window pump: a
+          # console window could not be fed.
           [string]$StandardInput,
           # Every output line is also added here, for a caller that parses it.
           [System.Collections.Generic.List[string]]$Capture,
           # Text that must never reach the log (the password) is masked.
           [string[]]$Mask,
           # Cancel waits for this one instead of killing it - for a step that
-          # must not stop half way (so-import-evtx marks each file imported as
-          # it goes, so a half-imported file would never be sent again).
-          [switch]$NoCancel)
+          # must not stop half way.
+          [switch]$NoCancel,
+          # Called with -Capture's lines whenever more arrive; its Text and
+          # Done/Total replace the CPU time on the status line and the bar.
+          [scriptblock]$Status)
 
     # A console window can neither be fed stdin nor have its output captured,
     # so a caller that needs either always gets the in-window pump.
@@ -1148,7 +1143,7 @@ function Invoke-ExternalTool {
     Initialize-ProcessPump
     $pump = New-Object EvtxerProcessPump($Exe, (ConvertTo-ProcessArgumentLine $Arguments), $WorkDir, $StandardInput)
     $script:ActivePump = $pump
-    $cancelled = $false
+    $cancelled = $false; $statusAt = -1; $st = $null
     try {
         while ($true) {
             # Read IsDone BEFORE draining: the last lines can land after the
@@ -1169,7 +1164,10 @@ function Invoke-ExternalTool {
                     $pump.Kill()
                 }
             }
-            Set-UiJobProgress $Label $Detail $pump.CpuTime
+            if ($Status -and $null -ne $Capture) {
+                if ($Capture.Count -ne $statusAt) { $statusAt = $Capture.Count; $st = & $Status $Capture }
+                Set-UiJobProgress $Label $st.Text $null $(if ($st.Total -gt 0) { $st.Done / $st.Total } else { -1 })
+            } else { Set-UiJobProgress $Label $Detail $pump.CpuTime }
             Invoke-UiPump
             Start-Sleep -Milliseconds 80
         }
@@ -1182,24 +1180,23 @@ function Invoke-ExternalTool {
 }
 
 # ------------------------------------------------------------ host links ---
-# After an upload or a raw import, each machine's two
-# links - its Hayabusa detections in Kibana, its raw events in Security Onion -
-# shown here, in the tool, over everything ever collected from it. The URLs
-# are built in HayabusaLib.ps1 (New-HostDetectionsUrl, New-HostRawUrl); this
-# only draws them. The Kibana side needs the detections data view's id, which
-# the Upload tab finds and remembers in importer.conf; the Security Onion side
-# needs the manager from the Raw Events tab.
+# After an upload, each machine's two links - its Hayabusa detections and its
+# raw events, both in Kibana's Discover - shown here, in the tool, over
+# everything ever collected from it. The URLs are built in HayabusaLib.ps1
+# (New-HostDetectionsUrl, New-HostRawUrl); this only draws them. The
+# detections link needs the detections data view's id, which the Upload tab
+# finds and remembers in importer.conf; the raw data view's id is fixed by the
+# dashboards file (hayabusa-raw-dataview).
 $script:DetectionsDataViewId = ''
 
 function Show-HostLinks($Panel, [string[]]$Names) {
     $Panel.Children.Clear()
     $kHost  = if ($txtHost)   { $txtHost.Text.Trim() }   else { '' }
-    $soHost = if ($txtSoHost) { $txtSoHost.Text.Trim() } else { '' }
     $rows = @(foreach ($s in @(Get-HostLinkSet $Names)) {
         [pscustomobject]@{
             Key        = $s.Key
             Detections = $(if ($kHost -and $script:DetectionsDataViewId) { New-HostDetectionsUrl -KibanaHost $kHost -DataViewId $script:DetectionsDataViewId -Names $s.Names } else { '' })
-            Raw        = $(if ($soHost) { New-HostRawUrl -SoHost $soHost -Names $s.Names } else { '' })
+            Raw        = $(if ($kHost) { New-HostRawUrl -KibanaHost $kHost -Names $s.Names } else { '' })
         }
     })
     if (-not $rows.Count) { $Panel.Visibility = 'Collapsed'; return }
@@ -1215,7 +1212,7 @@ function Show-HostLinks($Panel, [string[]]$Names) {
         $line.TextWrapping = 'Wrap'; $line.Margin = '0,2,0,0'
         $line.Inlines.Add((New-Object System.Windows.Documents.Run ("{0}   " -f $r.Key)))
         foreach ($side in @(@('Hayabusa detections', $r.Detections, 'detections: no Kibana data view known yet - upload once'),
-                            @('Raw events', $r.Raw, 'raw events: set the Security Onion manager on the Raw Events tab'))) {
+                            @('Raw events', $r.Raw, 'raw events: no Elasticsearch host yet - fill in the Upload tab'))) {
             if ($side[1]) {
                 $h = New-Object System.Windows.Documents.Hyperlink (New-Object System.Windows.Documents.Run $side[0])
                 $h.Foreground = $accent
@@ -1460,7 +1457,7 @@ $win.Add_Closing({
 $script:Busy = $false
 $missingTabs = @()
 foreach ($tabFile in 'wpf-collect.ps1', 'wpf-convert.ps1', 'wpf-upload.ps1', 'wpf-takajo.ps1',
-                     'wpf-kibana.ps1', 'wpf-soimport.ps1', 'wpf-settings.ps1', 'wpf-guide.ps1', 'wpf-queue.ps1') {
+                     'wpf-kibana.ps1', 'wpf-settings.ps1', 'wpf-guide.ps1', 'wpf-queue.ps1') {
     $path = Join-Path $PSScriptRoot $tabFile
     # A missing tab used to be skipped in silence - and a code\ folder left
     # behind on a deployment copy is exactly how one goes missing.
@@ -1472,6 +1469,15 @@ foreach ($tabFile in 'wpf-collect.ps1', 'wpf-convert.ps1', 'wpf-upload.ps1', 'wp
     }
     else { $missingTabs += $tabFile }
 }
+
+# The Raw Events tab is gone (v81): what it left on this machine goes once.
+try {
+    $retired = @(Remove-RetiredRawImportState $script:AppRoot)
+    if ($retired.Count) {
+        Write-Log ("The Raw Events tab (raw events over SSH to Security Onion) was removed in v81 - raw events now go to " +
+                   "hayabusa-raw-(mission) with the upload. Removed what it left: $($retired -join '; ').`n") 'info'
+    }
+} catch { Write-Log "Could not remove the old Raw Events tab's settings: $($_.Exception.Message)`n" 'warn' }
 
 # ---- help marks ----
 # Field notes, 2026-10-27: a tooltip nobody knows is there explains nothing

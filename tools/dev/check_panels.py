@@ -24,6 +24,10 @@ CTX = ssl.create_default_context()   # verified unless --cafile / --insecure (ma
 
 
 def kql_to_lucene(q):
+    # A wildcard in a field name (New*Value - KQL cannot escape a space) is
+    # \* in query_string. This is no KQL syntax check: Lucene accepts things
+    # Kibana's KQL refuses (an escaped space), so render the dashboard too.
+    q = re.sub(r"([\w.]+)\*([\w.]+)(?=:)", r"\1\\*\2", q)
     q = re.sub(r"\band\b", "AND", q)
     q = re.sub(r"\bor\b", "OR", q)
     q = re.sub(r"(^|[\s(])not\s", r"\1NOT ", q)

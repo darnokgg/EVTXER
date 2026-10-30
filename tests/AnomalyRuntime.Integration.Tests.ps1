@@ -37,31 +37,33 @@ try {
                '"properties":{"event":{"properties":{"created":{"type":"date"}}},"@timestamp":{"type":"date"}}}}'
     Invoke-EsJson -Uri "$base/$idx" -Method Put -Headers $h -ContentType 'application/json' -Body $mapping -TimeoutSec 30 | Out-Null
     $docs = @{
-        s1 = @{ event = @{ created = '2026-10-18T03:07:00Z' }; winlog = @{ channel = 'Microsoft-Windows-Sysmon/Operational'; event_id = '1'
+        # v81: raw events are EVTXER's own, timed by @timestamp (Security Onion's
+        # importer kept the event's time in event.created).
+        s1 = @{ '@timestamp' = '2026-10-18T03:07:00Z'; winlog = @{ channel = 'Microsoft-Windows-Sysmon/Operational'; event_id = '1'
                 event_data = @{ Image = 'C:\Users\eve\AppData\Local\Temp\svchost.exe'; ParentImage = 'C:\Windows\explorer.exe' } } }
-        p1 = @{ event = @{ created = '2026-10-19T23:59:00Z' }; winlog = @{ channel = 'Security'; event_id = '4688'
+        p1 = @{ '@timestamp' = '2026-10-19T23:59:00Z'; winlog = @{ channel = 'Security'; event_id = '4688'
                 event_data = @{ NewProcessName = 'C:\WINDOWS\System32\SVCHOST.EXE' } } }
-        c1 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4688'
+        c1 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4688'
                 event_data = @{ NewProcessName = 'C:\Windows\System32\cmd.exe'; CommandLine = 'powershell -enc AAAA' } } }
         # Longer than the keyword's ignore_above: no doc value, the length must still come out.
-        l1 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4688'
+        l1 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4688'
                 event_data = @{ NewProcessName = 'C:\Windows\System32\cmd.exe'; CommandLine = ('x' * 300) } } }
-        v1 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'System'; event_id = '7045'
+        v1 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'System'; event_id = '7045'
                 event_data = @{ ServiceName = 'x'; ImagePath = 'C:\Users\Public\x.exe' } } }
-        e1 = @{ event = @{ created = '2026-10-18T00:00:00Z' }; winlog = @{ channel = 'Application'; event_id = '1000' } }
+        e1 = @{ '@timestamp' = '2026-10-18T00:00:00Z'; winlog = @{ channel = 'Application'; event_id = '1000' } }
         # Built-in accounts are left out of the account hunts - by their EXACT
         # shape only, with the SID of the SAME account, and never without one,
         # so an attacker cannot hide as "DWM-backdoor" or a fake SYSTEM
         # (security reviews, 2026-10-17).
-        b1 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'DWM-3'; TargetUserSid = 'S-1-5-90-0-3' } } }
-        b2 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'DWM-backdoor'; TargetUserSid = 'S-1-5-90-0-3' } } }
-        b3 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'sshd_1464'; TargetUserSid = 'S-1-5-111-1-2' } } }
-        b4 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'DWM-3' } } }
-        b5 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'SYSTEM'; TargetUserSid = 'S-1-5-18' } } }
-        b6 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'SYSTEM'; TargetUserSid = 'S-1-5-21-1-2-3-1001' } } }
-        b7 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'alice'; TargetUserSid = 'S-1-5-21-1-2-3-1002' } } }
-        b8 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'SYSTEM' } } }
-        b9 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = ('DWM-' + [char]0x0663); TargetUserSid = 'S-1-5-90-0-3' } } }
+        b1 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'DWM-3'; TargetUserSid = 'S-1-5-90-0-3' } } }
+        b2 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'DWM-backdoor'; TargetUserSid = 'S-1-5-90-0-3' } } }
+        b3 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'sshd_1464'; TargetUserSid = 'S-1-5-111-1-2' } } }
+        b4 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'DWM-3' } } }
+        b5 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'SYSTEM'; TargetUserSid = 'S-1-5-18' } } }
+        b6 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'SYSTEM'; TargetUserSid = 'S-1-5-21-1-2-3-1001' } } }
+        b7 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'alice'; TargetUserSid = 'S-1-5-21-1-2-3-1002' } } }
+        b8 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'SYSTEM' } } }
+        b9 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = ('DWM-' + [char]0x0663); TargetUserSid = 'S-1-5-90-0-3' } } }
         d4 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; user = @{ name = 'UMFD-0' }; winlog = @{ event_data = @{ TargetUserName = 'UMFD-0'; TargetUserSid = 'S-1-5-96-0-0' } } }
         d5 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; user = @{ name = 'UMFD-x' }; winlog = @{ event_data = @{ TargetUserName = 'UMFD-x'; TargetUserSid = 'S-1-5-96-0-0' } } }
         # user.name came from SubjectUserName: its SID is SubjectUserSid.
@@ -69,9 +71,9 @@ try {
         # A fake "SYSTEM" target must not borrow the real SYSTEM subject's SID.
         d7 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; user = @{ name = 'SYSTEM'; id = 'S-1-5-18' }
                 winlog = @{ event_data = @{ TargetUserName = 'SYSTEM'; TargetUserSid = 'S-1-5-21-9-9-9-1001'; SubjectUserName = 'admin'; SubjectUserSid = 'S-1-5-18' } } }
-        b11 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'sshd_4242'; TargetUserSid = 'S-1-5-21-1-2-3-1003' } } }
+        b11 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'sshd_4242'; TargetUserSid = 'S-1-5-21-1-2-3-1003' } } }
         # Final review, 2026-10-17: a null-session logon is attacker activity, not noise.
-        b10 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'ANONYMOUS LOGON'; TargetUserSid = 'S-1-5-7' } } }
+        b10 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4624'; event_data = @{ TargetUserName = 'ANONYMOUS LOGON'; TargetUserSid = 'S-1-5-7' } } }
         # Final review: a detection's file.path is the service path cut at the
         # first .exe; the whole line is winlog.event_data.ImagePath.
         d8 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; service = @{ name = 'svc' }; file = @{ path = 'C:\Windows\System32\cmd.exe' }
@@ -80,7 +82,7 @@ try {
         # has no doc value - the panel's row must come from op.CmdLine.
         d9 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; process = @{ command_line = ('y' * 300) } }
         # 64-bit Windows ships a 32-bit explorer.exe in SysWOW64 (lab run, 2026-10-17).
-        x1 = @{ event = @{ created = '2026-10-19T12:00:00Z' }; winlog = @{ channel = 'Security'; event_id = '4688'
+        x1 = @{ '@timestamp' = '2026-10-19T12:00:00Z'; winlog = @{ channel = 'Security'; event_id = '4688'
                 event_data = @{ NewProcessName = 'C:\Windows\SysWOW64\explorer.exe' } } }
         d1 = @{ '@timestamp' = '2026-10-18T03:07:00Z'; process = @{ executable = 'C:\Users\eve\AppData\Local\Temp\svchost.exe'
                 command_line = 'svchost.exe -k x'; parent = @{ executable = 'C:\Windows\explorer.exe' } } }

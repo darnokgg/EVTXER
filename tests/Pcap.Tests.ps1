@@ -104,9 +104,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $code = Join-Path $root 'code'
 $gated = @{
     'wpf-collect.ps1'  = @('verifying access', 'testing ports', 'collecting EVTX')
-    'wpf-upload.ps1'   = @('checking the Elasticsearch connection', 'uploading to ELK')
+    'wpf-upload.ps1'   = @('checking the Elasticsearch connection', 'uploading to ELK', 'uploading raw events to ELK')
     'wpf-kibana.ps1'   = @('importing dashboards', 'removing dashboards')
-    'wpf-soimport.ps1' = @('reading the SSH host key', 'testing the Security Onion connection', 'importing raw events to Security Onion')
 }
 foreach ($f in $gated.Keys) {
     $src = Get-Content (Join-Path $code $f) -Raw

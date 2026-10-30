@@ -27,7 +27,7 @@ Assert-True ($src -match 'x:Name="\w*PassPlain"[^>]*Visibility="Collapsed"') `
 # ---- nobody reads the boxes directly ----
 # Whichever control is visible holds the truth; a caller that reads one of them
 # by hand gets an empty string in exactly the state the other is showing.
-foreach ($getter in 'Get-CollectPassword', 'Get-UploadPassword', 'Get-SoPassword') {
+foreach ($getter in 'Get-CollectPassword', 'Get-UploadPassword') {
     Assert-True ($src -match [regex]::Escape($getter)) "$getter exists to hide which box is live"
 }
 # Two READS per field are legitimate and no more: the getter itself, and the

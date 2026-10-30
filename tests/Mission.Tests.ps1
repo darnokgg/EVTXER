@@ -28,3 +28,7 @@ Assert-True ($set -match 'Read-TypedConfirmation' -and $set -match '\$typed\.Tex
 Assert-True ($set -match "Test-DeletableIndexName \`$idx") "and only an index that passes the delete guard"
 Assert-True ($set -match "Confirm-PcapBeforeNetwork `"delete the mission index") "it asks about the capture like every network action"
 Assert-True ($set -match "New-LedgerRow -Action 'Delete index'") "and the deletion is in the activity log"
+# v81: a mission has a second index, its raw events - deleting the mission
+# takes both, and the label says where each kind goes.
+Assert-True ($set -match '\$rawIdx = Get-RawIndexName' -and $set -match "@\(\`$rawIdx, 'raw event\(s\)'\)") "deleting the mission takes its raw events' index too"
+Assert-True ($set -match "Where-Object \{ \`$_ -in 'upload', 'raw' \}") "and waits for queued raw steps as for uploads"

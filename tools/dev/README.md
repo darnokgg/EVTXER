@@ -14,7 +14,6 @@ beyond the unit tests. Never shipped with the tool.
 | `scratch-evtxer.ps1` | `-Action New/Start/Stop/Status`: the scratch copy in `%TEMP%\evx`; `Stop` closes it and checks none is left. |
 | `winrm_https_target.ps1` | Run ON a test target as administrator: `-Action Setup -AllowFrom <IP>` makes a temporary WinRM-over-HTTPS listener (self-signed, firewall open to that IP only, LocalAccountTokenFilterPolicy=1); `-Action Remove` restores exactly what it recorded. For the never-run live WinRM-HTTPS collection test. |
 | `patch.py` | Exact replacements from a spec file, keeping CRLF/BOM; all or nothing. |
-| `evtx_to_so_raw.ps1` | EVTX -> raw-event documents shaped like Security Onion 2.4 stores them (to test the raw dashboard without an SO). |
 | `check_panels.py` | Does every Lens panel of an ndjson have data on an ES/index? Read-only; `--runtime-from` for op.* fields. |
 | `hayabusa_compare.py` | Two Hayabusa builds on the same EVTX: detections, output fields, per-rule changes. |
 

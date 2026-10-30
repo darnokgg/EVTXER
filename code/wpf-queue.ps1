@@ -7,7 +7,7 @@
     steps ticked on this pane run by themselves, one job at a time (the
     switches moved here from the Settings tab on 2026-10-18 - the queue is
     the main path, the tabs the manual one): a Hayabusa scan of that folder -> ECS -> upload to the mission
-    index -> raw import to Security Onion -> archive.
+    index -> raw events to hayabusa-raw-<mission> -> archive.
 
     Each step runs off the window's thread (Invoke-QueueStep in a runspace,
     Start-LibJob); a DispatcherTimer here starts the steps and collects their
@@ -44,8 +44,8 @@ $queueXaml = @'
                 ToolTip="A Hayabusa scan of each collected host folder, then ECS."/>
       <CheckBox x:Name="chkAutoUpload" Tag="AutoUpload" Content="Upload" Margin="14,0,0,0" VerticalAlignment="Center"
                 ToolTip="To the mission index. Needs Convert, the mission name (Settings tab) and VERIFY CONNECTIVITY (Upload tab) - the Mission and ELK pills at the top turn green."/>
-      <CheckBox x:Name="chkAutoRaw" Tag="AutoRaw" Content="Raw import to SO" Margin="14,0,0,0" VerticalAlignment="Center"
-                ToolTip="Every event into Security Onion. Needs the Raw Events tab filled in, host key included - the SO pill at the top turns green."/>
+      <CheckBox x:Name="chkAutoRaw" Tag="AutoRaw" Content="Raw events" Margin="14,0,0,0" VerticalAlignment="Center"
+                ToolTip="Every event of each host, not only the detections, into hayabusa-raw-(mission) over the Upload tab's connection. Needs the mission name (Settings tab) and VERIFY CONNECTIVITY (Upload tab), as Upload does."/>
       <CheckBox x:Name="chkAutoArchive" Tag="AutoArchive" Content="Archive when done" Margin="14,0,0,0" VerticalAlignment="Center"
                 ToolTip="A verified zip into the archive folder (Settings tab), then the host folder's EVTX are deleted."/>
     </WrapPanel>
@@ -273,13 +273,13 @@ function Get-QueueBlockers {
     # Step -> what the operator has to do before it can run. Read from the
     # tabs each time, so a job goes on by itself once it is done.
     $b = @{}
-    if (-not (Find-Hayabusa)) { $b.scan = 'Hayabusa is missing from code\hayabusa-x64' }
-    if ($script:RulesUpdating) { $b.scan = $b.ecs = 'the Hayabusa rules are being updated (Settings tab)' }
-    if (-not (Get-MissionIndexName $script:Settings.MissionName)) { $b.upload = 'name the mission on the Settings tab' }
-    elseif (-not $script:ConnOk -or $script:ConnKey -ne (Get-UploadConnKey)) { $b.upload = 'press VERIFY CONNECTIVITY on the Upload tab' }
-    if (-not (Test-SoReady)) {
-        $b.raw = 'fill in the Raw Events tab - host, user, password and host key'
-    } elseif (-not (Find-PuttyTool plink) -or -not (Find-PuttyTool pscp)) { $b.raw = 'code\putty\plink.exe and pscp.exe are missing' }
+    # The raw step runs Hayabusa too (its search command reads rules\config).
+    if (-not (Find-Hayabusa)) { $b.scan = $b.raw = 'Hayabusa is missing from code\hayabusa-x64' }
+    if ($script:RulesUpdating) { $b.scan = $b.ecs = $b.raw = 'the Hayabusa rules are being updated (Settings tab)' }
+    $send = $null
+    if (-not (Get-MissionIndexName $script:Settings.MissionName)) { $send = 'name the mission on the Settings tab' }
+    elseif (-not $script:ConnOk -or $script:ConnKey -ne (Get-UploadConnKey)) { $send = 'press VERIFY CONNECTIVITY on the Upload tab' }
+    if ($send) { $b.upload = $send; if (-not $b.raw) { $b.raw = $send } }
     # Closing the PCAP question cancels, as it does for every other network
     # action: nothing more goes out until the operator says so.
     if ($script:QueuePcapClosed) {
@@ -291,11 +291,12 @@ function Get-QueueBlockers {
 }
 
 function Test-QueueReadsRules {
-    # Only a scan or a conversion reads the rules. An upload, raw import or
-    # archive can run through a rules update; new scans wait on RulesUpdating.
+    # A scan, a conversion and the raw step (Hayabusa's search) read the
+    # rules. An upload or archive can run through a rules update; new scans
+    # wait on RulesUpdating.
     $r = $script:QueueRun
     if (-not $r -or $r.Handle.IsCompleted) { return $false }
-    return ([string]@($r.Job.Steps)[$r.Job.Step]) -in 'scan', 'ecs'
+    return ([string]@($r.Job.Steps)[$r.Job.Step]) -in 'scan', 'ecs', 'raw'
 }
 
 function Save-QueueLines($Run) {
@@ -312,25 +313,23 @@ function Start-QueueStep($Job) {
     $network = $step -in 'upload', 'raw' -or ($step -eq 'archive' -and $script:Folders.Archive -like '\\*')
     if ($network -and -not $script:QueuePcapAsked) {
         if ($script:Busy) { return }
-        if (-not (Confirm-PcapBeforeNetwork 'send queued results over the network (upload, raw import, archive to a share)')) {
+        if (-not (Confirm-PcapBeforeNetwork 'send queued results over the network (upload, raw events, archive to a share)')) {
             $script:QueuePcapClosed = $true
             return
         }
         $script:QueuePcapAsked = $true
     }
-    $ctx = @{ HayabusaExe = (Find-Hayabusa); TemplatePath = $script:Template; ArchiveRoot = $script:Folders.Archive }
-    if ($step -eq 'upload') {
+    $ctx = @{ HayabusaExe = (Find-Hayabusa); TemplatePath = $script:Template; RawTemplatePath = $script:RawTemplate
+              ArchiveRoot = $script:Folders.Archive }
+    if ($step -in 'upload', 'raw') {
         # The connection VERIFY checked, with the certificate trust it checked
         # it under. The trust is one setting for the whole process, and other
         # tabs set their own, so it is put back to the Upload tab's here.
         if (-not (Set-TlsTrustFromUi)) { return }
         $ctx.EsBase = Get-EsBase; $ctx.EsHeaders = Get-AuthHeader $txtUser.Text.Trim() (Get-UploadPassword)
         $ctx.Index = Get-MissionIndexName $script:Settings.MissionName
+        $ctx.RawIndex = Get-RawIndexName $script:Settings.MissionName
         $ctx.EsHost = $txtHost.Text.Trim(); $ctx.EsPort = Get-UploadPort; $ctx.EsUser = Get-EsAccountLabel $txtUser.Text
-    }
-    if ($step -eq 'raw') {
-        $ctx.SoHost = $txtSoHost.Text.Trim(); $ctx.SoPort = Get-SoPort; $ctx.SoUser = $txtSoUser.Text.Trim()
-        $ctx.SoHostKey = Get-SshHostKeyFingerprint $txtSoHostKey.Text; $ctx.SoPassword = Get-SoPassword
     }
     New-Item -ItemType Directory -Path $script:QueueLogDir -Force -ErrorAction SilentlyContinue | Out-Null
     # The activity-log rows are made in the runspace, which has no launcher.
@@ -365,8 +364,8 @@ function Complete-QueueStep($Run) {
         # line, and on the row ("Done - LOW DISK ...") - not only at the end
         # of a green one (review, 2026-10-26).
         if ($res.Warning) {
-            $job.Note = "LOW DISK on the manager - $($res.Warning)"
-            Write-Log -Background "[Queue] $($job.Name): LOW DISK on the manager - $($res.Warning)`n" 'warn'
+            $job.Note = $res.Warning
+            Write-Log -Background "[Queue] $($job.Name): $($res.Warning)`n" 'warn'
         }
         # Where the data now shows - once a session per kind, not per host.
         if ($step -in 'upload', 'raw' -and -not $script:QueueToldWhere[$step]) {
@@ -379,7 +378,7 @@ function Complete-QueueStep($Run) {
         } else { $job.State = 'queued' }
         # Its folder is gone once archived; what showed it follows.
         if ($step -eq 'archive') {
-            foreach ($box in @($txtEvtx, $txtSoFolder)) {
+            foreach ($box in @($txtEvtx)) {
                 if ($box -and $box.Text -and -not (Test-Path -LiteralPath $box.Text)) { $box.Text = $script:Folders.Evtx }
             }
             if (Get-Command Update-ArchiveList -ErrorAction SilentlyContinue) { Update-ArchiveList }
@@ -412,20 +411,13 @@ function Confirm-QueueClose {
     $run = $script:QueueRun
     if ($run -and -not $run.Handle.IsCompleted) {
         $what = $script:QueueStepText[[string]@($run.Job.Steps)[$run.Job.Step]].Run
-        # so-import-evtx is never stopped half way, and the staged copies on
-        # the manager are removed only when it ends: closing now would leave
-        # evidence in the manager's /tmp (code review).
-        if ([string]@($run.Job.Steps)[$run.Job.Step] -eq 'raw') {
-            [void][System.Windows.MessageBox]::Show("A raw import to Security Onion is running ($($run.Job.Name)). It cannot be stopped half way, and its copies on the manager are removed only when it ends. Close EVTXER once the queue shows it finished.", 'Job queue')
-            return $false
-        }
         $ask = "A queued job is running: $($run.Job.Name) - $what.`n`nClose EVTXER anyway? The step stops now, and the job starts again at this step the next time EVTXER opens."
         if ([System.Windows.MessageBox]::Show($ask, 'Job queue', 'YesNo', 'Warning') -ne 'Yes') { return $false }
         $script:QueueStopped = $true
         $run.Progress.Cancel = $true
         # Long enough for Hayabusa or the ECS workers to be stopped and the
-        # step to say so. so-import-evtx is never stopped half way; if it is
-        # still running then, the job is simply resumed next time.
+        # step to say so; if it is still running then, the job is simply
+        # resumed next time.
         [void]$run.Handle.AsyncWaitHandle.WaitOne(20000)
         if ($run.Handle.IsCompleted) {
             Complete-QueueStep $run

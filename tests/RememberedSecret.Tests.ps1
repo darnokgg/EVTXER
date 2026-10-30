@@ -44,17 +44,44 @@ Assert-True (-not $script:SecretFolder.StartsWith($root, [StringComparison]::Ord
 
 # ---- the tabs: the review's two findings, and the cut-off Remember box ----
 $up = Get-Content (Join-Path $PSScriptRoot '..\code\wpf-upload.ps1') -Raw
-$so = Get-Content (Join-Path $PSScriptRoot '..\code\wpf-soimport.ps1') -Raw
 $set = Get-Content (Join-Path $PSScriptRoot '..\code\wpf-settings.ps1') -Raw
 # A password filled in for one host/user is cleared when either changes, so it
 # is never sent to another server (code review, 2026-10-16).
 Assert-True ($up -match '\$script:UpFilledFor -and \$script:UpFilledFor -ne \$key\) \{\s+\$txtPass\.Password = ''''') "Upload: a filled-in password does not follow a changed host or user"
-Assert-True ($so -match '\$script:SoFilledFor -and \$script:SoFilledFor -ne \$key\) \{\s+\$txtSoPass\.Password = ''''') "Raw Events: the same"
 Assert-True ($set -match '-not \$script:ConnOk -or \$script:ConnKey -ne \(Get-UploadConnKey\)') "the mission delete needs the connection still to be the one verified"
 # Found in use: "the REMEMBER button for passwords is cut off" - beside the password
 # it ran off the tab. Measured in the real window after the move: inside.
-foreach ($pair in @(@($up, 'chkRememberPass', 'chkShowPass'), @($so, 'chkRememberSoPass', 'chkShowSoPass'))) {
+foreach ($pair in @(, @($up, 'chkRememberPass', 'chkShowPass'))) {
     $src = $pair[0]
     Assert-True ($src.IndexOf("x:Name=`"$($pair[1])`"") -gt $src.IndexOf("x:Name=`"$($pair[2])`"") -and
                  $src.Substring($src.IndexOf("x:Name=`"$($pair[2])`""), $src.IndexOf("x:Name=`"$($pair[1])`"") - $src.IndexOf("x:Name=`"$($pair[2])`"")) -match 'A line of its own') "$($pair[1]) has a line of its own, under the password"
 }
+
+# ---- v81: what the removed Raw Events tab left behind goes ----
+# Its settings file, and the SSH password it remembered - a stored password
+# for a feature that no longer exists is only a liability.
+$app = Join-Path $env:TEMP ("evtxer-retired-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$sec = Join-Path $app 'secrets'
+New-Item -ItemType Directory -Path $app -Force | Out-Null
+try {
+    Assert-Equal @(Remove-RetiredRawImportState $app $sec).Count 0 "nothing left behind, nothing to say"
+    @{ host = 'so.lab'; port = '22'; user = 'analyst'; hostkey = 'SHA256:x' } | ConvertTo-Json | Set-Content (Join-Path $app 'soimport.conf')
+    Save-RememberedSecret 'ssh' 'so.lab' 'analyst' 'S3cr3t-ssh' $sec
+    # One for an earlier manager the .conf no longer names (review, v81).
+    Save-RememberedSecret 'ssh' 'old-so.lab' 'admin' 'S3cr3t-old' $sec
+    Save-RememberedSecret 'elastic' 'so.lab' 'analyst' 'keep-me' $sec
+    $gone = @(Remove-RetiredRawImportState $app $sec)
+    Assert-True (-not (Test-Path (Join-Path $app 'soimport.conf'))) "the Raw Events tab's settings file is deleted"
+    Assert-True ($null -eq (Get-RememberedSecret 'ssh' 'so.lab' 'analyst' $sec)) "and the SSH password it remembered"
+    Assert-True ($null -eq (Get-RememberedSecret 'ssh' 'old-so.lab' 'admin' $sec)) "and one for a manager the .conf no longer named"
+    Assert-Equal (Get-RememberedSecret 'elastic' 'so.lab' 'analyst' $sec) 'keep-me' "but no other remembered password"
+    $said = $gone -join ' '
+    Assert-True ($said -match '2 remembered SSH password' -and $said -match 'analyst@so\.lab' -and $said -match 'soimport\.conf') "and the log says what went"
+    Assert-True ($said -notmatch 'S3cr3t') "never the password itself"
+    # Another Windows user of the same install starts later: the .conf is
+    # already gone, their own SSH password still goes.
+    Save-RememberedSecret 'ssh' 'so.lab' 'other' 'S3cr3t-2' $sec
+    $gone = @(Remove-RetiredRawImportState $app $sec)
+    Assert-True ($null -eq (Get-RememberedSecret 'ssh' 'so.lab' 'other' $sec) -and ($gone -join ' ') -match '1 remembered SSH password') "with no .conf left, a remembered SSH password still goes"
+    Assert-Equal (Get-RememberedSecret 'elastic' 'so.lab' 'analyst' $sec) 'keep-me' "and still nothing else"
+} finally { Remove-Item -LiteralPath $app -Recurse -Force -ErrorAction SilentlyContinue }

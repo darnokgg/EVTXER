@@ -15,10 +15,10 @@ intrusion in more ways than "seen rarely"; these are the other seven
   7. Longest command lines - encoded and obfuscated payloads are long
 
 One panel list, two data views:
-  raw         "Raw Events - Anomaly Hunt (Security Onion)" on hayabusa-raw-dataview
-              (every event; the full normal baseline anomaly hunting needs)
+  raw         "Raw Events - Anomaly Hunt" on hayabusa-raw-dataview (hayabusa-raw-*)
+              (every event EVTXER sent; the full normal baseline anomaly hunting needs)
   detections  "Hayabusa - Anomaly Hunt" on hayabusa-evtx-dataview
-              (Security Onion and plain Elastic; Hayabusa's informational rules make it work, thinner)
+              (Hayabusa's informational rules make it work, thinner)
 
 Most targets keep DEFAULT Windows logging; Sysmon is rare. Every hunt uses the
 best record a machine has (program starts: Sysmon 1, else 4688) and leans on
@@ -73,15 +73,15 @@ VIEWS = {
     "raw": {
         "dashboard": "hayabusa-raw-anomaly-dashboard", "prefix": "hayabusa-raw-anomaly-",
         "data_view": "hayabusa-raw-dataview",
-        "title": "Raw Events - Anomaly Hunt (Security Onion)",
+        "title": "Raw Events - Anomaly Hunt",
         "query": "",
-        "host": "winlog.computer_name", "time": "event.created",
+        "host": "host.name", "time": "@timestamp",
         "proc": "op.ProcPath", "parent": "op.ParentPath", "cmd": "op.CmdLine", "cmdlen": "op.CmdLen",
         "svc": "winlog.event_data.ServiceName", "svcbin": "op.ServiceBinary", "svcbinlen": "op.ServiceBinaryLen",
         "task": "winlog.event_data.TaskName", "user": "winlog.event_data.TargetUserName",
-        "src": "winlog.event_data.IpAddress", "pshost": "op.HostApplication", "pshostlen": "op.HostApplicationLen",
+        "src": "winlog.event_data.IpAddress", "pshost": "winlog.event_data.HostApplication", "pshostlen": "op.HostApplicationLen",
         "q": _queries(_raw_q),
-        "note": (" Every raw Windows event Security Onion holds, so EVTXER's own collection visit "
+        "note": (" Every Windows event EVTXER sent, so its own collection visit "
                  "(wevtutil, its staging folder) shows here too."),
     },
     "detections": {

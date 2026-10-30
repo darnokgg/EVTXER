@@ -70,63 +70,10 @@ else {
     } finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
-# ---- 2. Security Onion's disk ----
-$df = @('Filesystem         1024-blocks      Used Available Capacity Mounted on',
-        '/dev/mapper/ol-root   52428800  41943040  10485760      80% /',
-        '/dev/mapper/ol-nsm   209715200 167772160  41943040      80% /nsm')
-$d = @(ConvertFrom-DfOutput $df)
-Assert-Equal $d.Count 2 "df -Pk: one row per path asked, the header skipped"
-Assert-Equal $d[0].AvailKB 10485760 "free space of the staging folder's file system"
-Assert-Equal $d[1].Mount '/nsm' "and of /nsm, where Security Onion keeps the import and Elasticsearch its data"
-Assert-Equal @(ConvertFrom-DfOutput @('EVTXER-STAGED', 'df: /nsm: No such file or directory')).Count 0 "anything else is ignored"
-
-Assert-Equal @(Get-SoDiskWarning $d 1GB).Count 0 "plenty of room: no warning"
-$w = @(Get-SoDiskWarning $d 5GB)
-Assert-Equal $w.Count 1 "5 GB of EVTX would take /nsm past 85% (a copy plus the indexed events, ~3x)"
-Assert-True ($w[0] -match '/nsm' -and $w[0] -match '95%') "the warning names /nsm and when Elasticsearch stops accepting data"
-$w = @(Get-SoDiskWarning $d 12GB)
-Assert-True (@($w | Where-Object { $_ -match '/tmp' }).Count -eq 1) "more than the staging file system holds: that is said too"
-Assert-Equal @(Get-SoDiskWarning @() 50GB).Count 0 "free space that could not be read: no warning, nothing stops"
-
-Assert-True ((Get-SoRemoteCommand Stage '/tmp/x') -match 'df -Pk /tmp /nsm') "read on the staging call already made - no extra connection, no polling"
-$imp = [regex]::Match($lib, '(?s)function Invoke-SoImport.*?\n\}').Value
-Assert-True ($imp -match 'Get-SoDiskWarning' -and $imp -match 'DiskWarning') "a raw import checks once and reports it"
-Assert-True ($imp -notmatch 'throw[^\n]*DiskWarning') "a warning only - it never stops the import"
-# In Detail, so it is there on success AND on the failure it predicted -
-# the tab, the queue's summary or failure, and the activity log all read it.
-Assert-True ($imp -match '(?s)if \(\$r\.DiskWarning\) \{ \$r\.Detail = [^\n]*LOW DISK on the manager[^\n]*\}\s*return \$r') "the warning goes into the result's Detail, last"
-$soi = Get-Content (Join-Path $code 'wpf-soimport.ps1') -Raw
-Assert-True ($soi -match 'Not imported: \$\(\$s\.Detail\)') "the Raw Events tab shows Detail when an import fails"
-
-# ---- the low-disk path, run for real (review, 2026-10-26: was only a source grep) ----
-# Invoke-SoImport against a stand-in for plink/pscp: the staging call answers
-# with df rows for a nearly full /nsm, the import then fails - the failure a
-# full disk causes. The warning must be logged amber and be in Detail.
-$dir = Join-Path ([IO.Path]::GetTempPath()) ("evtxer-lowdisk-" + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $dir | Out-Null
-try {
-    $f = Join-Path $dir 'Security.evtx'; [IO.File]::WriteAllBytes($f, (New-Object byte[] 4096))
-    $logged = New-Object System.Collections.Generic.List[string]
-    $fake = {
-        param($p)
-        if ($null -ne $p.Capture) {          # an EMPTY list is false in PowerShell
-            if ($p.Label -like 'Stage*') {
-                foreach ($l in 'EVTXER-STAGED', 'Filesystem 1024-blocks Used Available Capacity Mounted on',
-                               '/dev/sda1 52428800 1048576 51380224 2% /',
-                               '/dev/sdb1 1048576 1048000 576 99% /nsm') { $p.Capture.Add($l) }
-            } elseif ($p.Label -like 'Clean*') { $p.Capture.Add('EVTXER-CLEANED') }
-        }
-        0
-    }
-    $r = Invoke-SoImport -Files @(Get-Item -LiteralPath $f) -HostName 'so1' -User 'u' -Password 'p' `
-            -HostKey ('SHA256:' + ('A' * 43)) -Run $fake -IsCancelled { $false } -Log { param($t, $k) $logged.Add("$k|$t") }
-    Assert-True ($r.DiskWarning -match '/nsm') "the staging call's free space gives a warning for a nearly full /nsm"
-    Assert-True ($r.Outcome -ne 'Success' -and $r.Detail -match 'LOW DISK on the manager') "and a failed import carries it in Detail, beside its error"
-    Assert-True (@($logged | Where-Object { $_ -like 'warn|LOW DISK ON THE MANAGER*' }).Count -eq 1) "logged once, amber"
-} finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
-
-# The queue keeps it in sight: its own amber line in the window, and on the row.
+# ---- 2. a step's warning stays in sight ----
+# Its own amber line in the window, and on the queue row (the raw step's:
+# records of the export that could not be read).
 $wq = Get-Content (Join-Path $code 'wpf-queue.ps1') -Raw
 $done = [regex]::Match($wq, '(?s)function Complete-QueueStep.*?\n\}').Value
-Assert-True ($done -match "\`$res\.Warning" -and $done -match "Write-Log -Background [^\n]*LOW DISK[^\n]*'warn'" -and $done -match '\$job\.Note = "LOW DISK') "a queued raw import's low-disk warning gets its own amber line and stays on the row"
-Assert-True ([regex]::Match($lib, "(?s)'raw' \{.*?\n            \}").Value -match '\$r\.Warning = \$s\.DiskWarning') "the queue step hands the warning back"
+Assert-True ($done -match "\`$res\.Warning" -and $done -match "Write-Log -Background [^\n]*Warning[^\n]*'warn'" -and $done -match '\$job\.Note = \$res\.Warning') "a queued step's warning gets its own amber line and stays on the row"
+Assert-True ([regex]::Match($lib, "(?s)'raw' \{.*?\n            \}").Value -match '\$r\.Warning = ') "the raw step hands its warning back"

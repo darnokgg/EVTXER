@@ -66,13 +66,6 @@ Takajo's release bundles these, unmodified:
                    https://fontawesome.com/license/free
 
 
-PUTTY 0.85 (plink, pscp)                             code\putty\
-------------------------
-Copyright 1997-2026 Simon Tatham and the others named in code\putty\LICENCE.
-Licence: MIT-style - code\putty\LICENCE
-Source:  https://www.chiark.greenend.org.uk/~sgtatham/putty/
-
-
 Passing EVTXER on
 -----------------
 Keep this folder with it. The AGPL lets you pass Hayabusa and Takajo on as

@@ -1,30 +1,35 @@
 #!/usr/bin/env python3
-"""Raw-event hunting dashboard: PEAK baseline hunts on Security Onion's raw
-Windows events - the ones so-import-evtx (EVTXER's Raw Events tab) puts there.
+"""Raw-event hunting dashboard: PEAK baseline hunts on EVERY Windows event
+EVTXER sends (v81: Hayabusa's search export, converted with the curated
+field list in HayabusaLib.ps1, uploaded to hayabusa-raw-<mission>).
 
 The Hayabusa dashboards show DETECTIONS: only the events a Sigma rule matched.
-This one reads EVERY event, so it finds what no rule caught - the same PEAK
+This one reads every event, so it finds what no rule caught - the same PEAK
 idea as make_peak_dashboard.py (rare first: noise repeats, intrusions mostly
-do not), on the fields Security Onion 2.4 stores (operator request,
-2026-10-16: "PowerShell commands, strange PowerShell commands - PEAK").
+do not), operator request 2026-10-16 ("PowerShell commands, strange
+PowerShell commands - PEAK").
 
-Field names were read from a real Security Onion 2.4.211 import of the
-599-file sample corpus (a lab Security Onion, 2026-10-16), not guessed:
-  - the Windows machine is winlog.computer_name. host.name there is the
-    Security Onion box itself ("manager");
+The fields are EVTXER's own (ConvertTo-RawEcsDocument), the same names the
+detections use:
+  - the Windows machine is host.name; @timestamp is when the event happened
+    (Security Onion's importer, the route before v81, put the import time
+    there - no longer);
   - winlog.event_id, winlog.record_id and every winlog.event_data.* field are
     KEYWORDS, so a query on them is exact and case-sensitive - "both cases"
     below is why;
-  - 4104 script text is powershell.file.script_block_text; Sysmon 1 fills
-    process.command_line (a wildcard field) and process.name/parent.name;
-    4688 keeps its command line in winlog.event_data.CommandLine;
-  - Windows PowerShell 400/600/800 carry their text in
-    winlog.event_data.Data.#text (an array of strings);
-  - log-cleared events (1102, 104) keep the account in userdata.LogFileCleared.
-  - Security Onion 2.4.211 files an imported event under the time it was
-    IMPORTED in @timestamp; the event's own time is event.created. So this
-    data view's time field is event.created: the time picker means "when it
-    happened on the host", the same clock as the Hayabusa detections.
+  - 4104 script text is powershell.file.script_block_text, a wildcard field
+    (ranked in tables at any length); Sysmon 10's accessing process is
+    winlog.event_data.SourceImage; Kerberos client addresses are ranked by
+    source.ip (plain IPv4 - the Windows field keeps ::ffff:); Sysmon 1 and 4688
+    fill process.command_line, process.name and process.parent.*; 4688 also
+    keeps winlog.event_data.CommandLine;
+  - the classic Windows PowerShell log's HostApplication is a real field,
+    winlog.event_data.HostApplication (pulled out of its Data text when
+    converted);
+  - log-cleared events (1102, 104) keep the account in
+    winlog.event_data.SubjectUserName, 104 the log's name in .Channel;
+  - Hayabusa's export has no provider name: a panel tells events apart by
+    channel, event id and fields.
 
 Every panel's description (the (i) beside its title) says why it matters.
 
@@ -46,34 +51,20 @@ from make_peak_dashboard import col_unique  # noqa: E402
 DASHBOARD_ID = "hayabusa-raw-hunt-dashboard"
 DATA_VIEW_ID = "hayabusa-raw-dataview"
 SEARCH_ID = "hayabusa-raw-search-scriptblocks"
-# so-import-evtx writes to logs-import-so; a Security Onion that collects
-# Windows events with Elastic Agent keeps the same fields in these.
-INDEX_PATTERN = "logs-import-so*,logs-windows.*,logs-system.*"
-TIME_FIELD = "event.created"
+INDEX_PATTERN = "hayabusa-raw-*"
+TIME_FIELD = "@timestamp"
 # All time, as EVTXER's own per-host links: old evidence is still evidence
 # (the sample corpus reaches back to 2013), and a log's events can predate
 # the mission by years.
 TIME_FROM = "1970-01-01T00:00:00.000Z"
 TIME_TO = "now"
 
-HOST = "winlog.computer_name"
+HOST = "host.name"
 ED = "winlog.event_data."
 
 # Windows PowerShell 400 keeps the command line PowerShell was started with
-# inside one long text (winlog.event_data.Data.#text, an array) next to a
-# per-start SequenceNumber and RunspaceId - so that text is unique every
-# time and cannot be ranked. This runtime field cuts out the
-# "HostApplication=..." line alone. It lives in the data view.
-HOST_APPLICATION = "op.HostApplication"
-HOST_APPLICATION_SCRIPT = (
-    "def w = params._source.winlog; if (w == null) return; def ed = w.event_data; "
-    "if (ed == null || ed.Data == null) return; def t = ed.Data['#text']; if (t == null) return; "
-    "if (!(t instanceof List)) { t = [t]; } "
-    "for (def s : t) { if (s == null) continue; String x = s.toString(); int i = x.indexOf('HostApplication='); "
-    # Painless has no '\n' escape in a string literal: the newline is made from its code.
-    "if (i < 0) continue; int e = x.indexOf(Character.toString((char) 10), i); "
-    "String v = e < 0 ? x.substring(i + 16) : x.substring(i + 16, e); emit(v.trim()); return; }"
-)
+# in its text; EVTXER pulls it out as a field of its own when it converts.
+HOST_APPLICATION = ED + "HostApplication"
 
 
 def _cases(words):
@@ -145,10 +136,10 @@ def table(obj_id, title, description, rows, query, extra_metrics=None, metric_la
     return lens(obj_id, title, description, datatable(columns=order), labelled(cols), order, query=query)
 
 
-def timeline(obj_id, title, description, split_field, query=""):
+def timeline(obj_id, title, description, split_field, query="", split_label="Log"):
     cols = labelled({
-        "c_bucket": col_date(TIME_FIELD, "When it happened (event.created)"),
-        "c_split": col_terms_ordered(split_field, 8, "Log", "desc"),
+        "c_bucket": col_date(TIME_FIELD, "When it happened"),
+        "c_split": col_terms_ordered(split_field, 8, split_label, "desc"),
         "c_metric": col_count("Events"),
     })
     vis = xy(series="bar_stacked", x="c_bucket", y=("c_metric",), split="c_split")
@@ -169,7 +160,7 @@ def build_panels():
 
     # ---- 0. What is here -------------------------------------------------
     row((timeline("hayabusa-raw-timeline", "Raw events over time, by log",
-                  "Every imported Windows event by the time it happened. A gap in a busy log, or "
+                  "Every Windows event by the time it happened. A gap in a busy log, or "
                   "a log that stops early, is where to look for clearing or a stopped service.",
                   "winlog.channel", "winlog.channel: *"), 48),
         h=12)
@@ -262,8 +253,8 @@ def build_panels():
         (table("hayabusa-raw-remote-logons", "13. Remote logons (3, 10) - source > host > account",
                "Who came in over the network, from where. One source address fanning out to "
                "many hosts with the same account is lateral movement. Only logons that "
-               "name a source address (Security Onion drops the '-' Windows writes for "
-               "many Kerberos logons - those are in panel 12).",
+               "name a source address (many Kerberos logons write '-', which is left out - "
+               "those are in panel 12).",
                [(ED + "IpAddress", 20, "From", "desc"), (HOST, 5, "To", "desc"),
                 (ED + "TargetUserName", 3, "Account", "desc")],
                'winlog.channel: "Security" and winlog.event_id: "4624" and ' + ED + 'LogonType: ("3" or "10") '
@@ -294,10 +285,10 @@ def build_panels():
                "TerminalServices-RemoteConnectionManager 1149: a user authenticated to RDP. "
                "It is logged even when the Security log has rolled over. (A 1149 that names "
                "no account is left out.)",
-               [("userdata.EventXML.Param1", 20, "Account", "asc"), ("userdata.EventXML.Param3", 3, "From", "desc"),
+               [(ED + "Param1", 20, "Account", "asc"), (ED + "Param3", 3, "From", "desc"),
                 (HOST, 3, "To", "desc")],
                'winlog.channel: "Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational" '
-               'and winlog.event_id: "1149" and userdata.EventXML.Param1: * and userdata.EventXML.Param3: *'), 24),
+               'and winlog.event_id: "1149" and ' + ED + 'Param1: * and ' + ED + 'Param3: *'), 24),
         h=15)
 
     # ---- 4. Persistence --------------------------------------------------
@@ -334,16 +325,15 @@ def build_panels():
     # ---- 5. Defense evasion and credential access -----------------------
     row((table("hayabusa-raw-cleared", "22. Logs cleared (1102 / 104)",
                "Clearing a log is how an intruder hides. 1102 = Security log cleared, 104 = "
-               "another log (its name is in userdata.LogFileCleared.Channel). Who did it, and on "
+               "another log (its name is in winlog.event_data.Channel). Who did it, and on "
                "which host, is the start of the investigation - check what came just before.",
-               [(HOST, 20, "Computer", "desc"), ("userdata.LogFileCleared.SubjectUserName", 3, "Cleared by", "desc"),
+               [(HOST, 20, "Computer", "desc"), (ED + "SubjectUserName", 3, "Cleared by", "desc"),
                 ("winlog.event_id", 2, "Event", "desc")],
                # 104 is also the ID of unrelated events from other providers
-               # (a smart-card driver's, on a test workstation) - only the Eventlog's
-               # own 104 is "log cleared".
-               'winlog.provider.name: "Microsoft-Windows-Eventlog" and '
-               '((winlog.channel: "Security" and winlog.event_id: "1102") or '
-               '(winlog.channel: "System" and winlog.event_id: "104"))'), 24),
+               # (a smart-card driver's, on a test workstation). The export has
+               # no provider name; only the Eventlog's own 104 names who cleared.
+               '(winlog.channel: "Security" and winlog.event_id: "1102") or '
+               '(winlog.channel: "System" and winlog.event_id: "104" and ' + ED + 'SubjectUserName: *)'), 24),
         (table("hayabusa-raw-defender", "23. Defender detections (1116 / 1117)",
                "Windows Defender found something (1116) or acted on it (1117). A hacking tool "
                "caught on one host means the attacker had it there - look at what ran on "
@@ -356,11 +346,42 @@ def build_panels():
     row((table("hayabusa-raw-lsass", "24. LSASS memory access (Sysmon 10)",
                "A process opening lsass.exe is how credentials are dumped. GrantedAccess 0x1010, "
                "0x1410 or 0x1fffff from anything but security software is the classic shape.",
-               [("process.executable", 15, "Accessed by", "desc"), (ED + "GrantedAccess", 3, "Access", "desc"),
+               [(ED + "SourceImage", 15, "Accessed by", "desc"), (ED + "GrantedAccess", 3, "Access", "desc"),
                 (HOST, 3, "Computer", "desc")],
                'winlog.channel: "Microsoft-Windows-Sysmon/Operational" and winlog.event_id: "10" and '
                + _any(ED + "TargetImage", ["*lsass.exe", "*LSASS.EXE", "*Lsass.exe"])), 48),
         h=13)
+
+    # ---- 6. Kerberos - logged on the domain controllers -----------------
+    row((table("hayabusa-raw-kerberoast", "25. Kerberoasting - RC4 service tickets (4769, 0x17)",
+               "A service ticket encrypted with RC4 (0x17) for a user account's SPN can be "
+               "cracked offline - that is kerberoasting. Modern Windows asks for AES; one "
+               "account requesting RC4 tickets for many services is the classic shape. "
+               "Computer accounts ($) and krbtgt are left out.",
+               [(ED + "ServiceName", 20, "Service (SPN account)", "desc"), (ED + "TargetUserName", 5, "Requested by", "desc")],
+               'winlog.channel: "Security" and winlog.event_id: "4769" and ' + ED + 'TicketEncryptionType: "0x17" '
+               'and not ' + ED + 'ServiceName: (*$ or "krbtgt")', extra_metrics=[(HOST, "DCs")]), 24),
+        (table("hayabusa-raw-asrep", "26. AS-REP roasting - TGTs without pre-authentication (4768)",
+               "A TGT handed out with no pre-authentication (PreAuthType 0) can be cracked "
+               "offline. Only accounts with 'Do not require Kerberos preauthentication' set "
+               "do this - every one listed is a finding, attacked or not.",
+               [(ED + "TargetUserName", 20, "Account", "asc")],
+               'winlog.channel: "Security" and winlog.event_id: "4768" and ' + ED + 'PreAuthType: "0"',
+               extra_metrics=[(ED + "IpAddress", "Requested from")]), 24),
+        h=15)
+    row((table("hayabusa-raw-kerb-spray", "27. Kerberos pre-auth failures by source (4771) - password spraying",
+               "Status 0x18 is a wrong password. One source failing for many accounts is "
+               "password spraying over Kerberos - quieter than 4625, and logged only on the DCs.",
+               [("source.ip", 20, "From", "desc")],
+               'winlog.channel: "Security" and winlog.event_id: "4771" and ' + ED + 'Status: "0x18" and source.ip: *',
+               extra_metrics=[(ED + "TargetUserName", "Accounts tried")]), 24),
+        (table("hayabusa-raw-pkinit", "28. Certificate logons - PKINIT (4768 with a certificate)",
+               "A TGT obtained with a certificate. Normal for smart cards; for an account "
+               "that never used one it is shadow credentials or certificate-template abuse "
+               "(ESC1-ESC8) - read the issuer.",
+               [(ED + "TargetUserName", 20, "Account", "asc"), (ED + "CertIssuerName", 3, "Certificate issuer", "desc")],
+               'winlog.channel: "Security" and winlog.event_id: "4768" and ' + ED + 'CertIssuerName: *'), 24),
+        h=15)
     return p
 
 
@@ -389,11 +410,10 @@ def build_data_view():
         "id": DATA_VIEW_ID, "type": "index-pattern", "managed": False,
         "attributes": {
             "title": INDEX_PATTERN,
-            "name": "Raw Windows events (Security Onion)",
+            "name": "Raw Windows events (EVTXER)",
             "timeFieldName": TIME_FIELD,
             "fields": "[]", "fieldFormatMap": "{}",
-            "runtimeFieldMap": json.dumps({HOST_APPLICATION: {
-                "type": "keyword", "script": {"source": HOST_APPLICATION_SCRIPT}}}),
+            "runtimeFieldMap": "{}",
             "sourceFilters": "[]", "allowHidden": False,
             "fieldAttrs": json.dumps({
                 TIME_FIELD: {"customLabel": "When it happened"},
@@ -419,13 +439,13 @@ def build_dashboard(panels, search, search_y):
     return {
         "id": DASHBOARD_ID, "type": "dashboard", "managed": False,
         "attributes": {
-            "title": "Raw Events - PEAK Hunt (Security Onion)",
-            "description": "PEAK baseline hunting on EVERY raw Windows event Security Onion "
-                           "holds (so-import-evtx / EVTXER's Raw Events tab), not only the ones "
-                           "Hayabusa flagged. Tables are sorted so the RARE answers come first. "
-                           "Time = when the event happened (event.created). Pivot from a "
-                           "Hayabusa detection: winlog.computer_name + winlog.channel + "
-                           "winlog.record_id finds its raw event; then widen to the host.",
+            "title": "Raw Events - PEAK Hunt",
+            "description": "PEAK baseline hunting on EVERY Windows event EVTXER sent "
+                           "(hayabusa-raw-*), not only the ones Hayabusa flagged. Tables are "
+                           "sorted so the RARE answers come first. Time = when the event "
+                           "happened (@timestamp). Pivot from a Hayabusa detection: host.name + "
+                           "winlog.channel + winlog.record_id finds its raw event; then widen "
+                           "to the host.",
             "panelsJSON": json.dumps(pj),
             "optionsJSON": json.dumps({"useMargins": True, "syncColors": True, "syncCursor": True,
                                        "syncTooltips": True, "hidePanelTitles": False}),

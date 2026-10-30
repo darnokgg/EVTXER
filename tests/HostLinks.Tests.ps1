@@ -1,8 +1,8 @@
 # tests/HostLinks.Tests.ps1
 #
-# After an upload or a raw import EVTXER shows each host's
-# two links - Hayabusa detections in Kibana, raw events in Security Onion -
-# covering everything ever collected from it ("as far back as possible").
+# After an upload EVTXER shows each host's two links - its Hayabusa
+# detections and its raw events, both in Kibana's Discover - covering
+# everything ever collected from it ("as far back as possible").
 . "$PSScriptRoot\..\code\HayabusaLib.ps1"
 
 # ---- one machine, one row, whichever name form it reported ----
@@ -44,38 +44,22 @@ Assert-True ((New-HostDetectionsUrl -KibanaHost 'so' -DataViewId 'x' -Names @("O
 $odd = New-HostDetectionsUrl -KibanaHost 'so' -DataViewId 'x' -Names @('R&D#1!')
 Assert-True ($odd -match 'R%26D%231!!' -and $odd -notmatch '[&#](?!.*_a=)' -and ($odd -split '&_a=').Count -eq 2) "& # ! in a name cannot end the parameter, start a fragment or break Rison"
 
-# ---- Security Onion: its own dashboards, this host, all time ----
-$r = New-HostRawUrl -SoHost 'so.lab' -Names @('WIN10') -NowUtc ([datetime]'2026-10-16T05:00:00Z')
-Assert-True ($r.StartsWith('https://so.lab/#/dashboards?q=winlog.computer_name')) "it opens Security Onion's dashboards, like so-import-evtx's own link"
-# A real SO 2.4.211 import (2026-10-16): host.name there is the Security Onion
-# box itself ("manager"); the Windows machine is in winlog.computer_name.
-Assert-True ($r -notmatch 'q=host\.name') "on the Windows machine's name, not the Security Onion box that ingested the events"
-Assert-True ($r -match '%7C%20groupby%20event\.dataset') "grouped by dataset, as the importer's link is"
-Assert-True ($r.EndsWith('&t=1970%2F01%2F01%2000%3A00%3A00%20AM%20-%202026%2F10%2F17%2000%3A00%3A00%20AM&z=UTC')) "from 1970 to tomorrow, in the importer's own time format"
-Assert-Equal ([uri]::UnescapeDataString(($r -split 'q=|&t=')[1])) ((Get-HostLinkQuery @('WIN10') 'winlog.computer_name') + ' | groupby event.dataset') "the query reads back exactly"
-Assert-True ((Get-HostLinkQuery @('WIN10')).StartsWith('host.name:(')) "the detections link still asks host.name - our documents carry the event's Computer there"
-
-# ---- the Raw Events tab reads the machine names from the EVTX themselves ----
-$sample = Join-Path $PSScriptRoot '..\evtx-samples'
-if (Test-Path -LiteralPath $sample) {
-    $dir = Get-ChildItem -LiteralPath $sample -Recurse -Filter *.evtx -File | Select-Object -First 1 | ForEach-Object DirectoryName
-    $names = @(Get-EvtxHostNames $dir)
-    $want = (Get-WinEvent -Path (Get-ChildItem -LiteralPath $dir -Filter *.evtx -File | Sort-Object Length -Descending | Select-Object -First 1).FullName -MaxEvents 1).MachineName
-    Assert-True ($names -ccontains $want) "the machine name comes from the events, as written ($want)"
-} else {
-    Write-Host "  [SKIP] evtx-samples absent - machine names from real EVTX not checked" -ForegroundColor Yellow
-}
-Assert-Equal @(Get-EvtxHostNames (Join-Path $env:TEMP 'no-such-folder-9e1f')).Count 0 "a missing folder names no machines"
+# ---- raw events: the same Discover link, on the raw data view ----
+$r = New-HostRawUrl -KibanaHost 'so.lab' -Names @('WIN10')
+Assert-True ($r.StartsWith('https://so.lab/kibana/app/discover#/?_g=')) "the raw events link opens Discover too"
+Assert-True ($r -match "index:'hayabusa-raw-dataview'") "on the raw events' data view (its id is fixed by the dashboards file)"
+Assert-True ($r -match 'host\.name:\(%22WIN10%22') "for this host - host.name is the Windows machine in EVTXER's raw events"
+Assert-True ($r -match "from:'1970-01-01T00:00:00\.000Z'") "all time, as the detections link"
+Assert-True ((New-HostRawUrl -KibanaHost 'k' -Names @('A') -Port 5601).StartsWith('https://k:5601/')) "a non-default port is kept"
 
 # ---- the links are drawn in EVTXER, after the work ----
 $root = Split-Path -Parent $PSScriptRoot
 $shell = Get-Content (Join-Path $root 'code\HayabusaMissionTool.ps1') -Raw
 $up    = Get-Content (Join-Path $root 'code\wpf-upload.ps1') -Raw
-$so    = Get-Content (Join-Path $root 'code\wpf-soimport.ps1') -Raw
 Assert-True ($shell -match 'function Show-HostLinks') "the shell draws the host links, for every tab"
 Assert-True ($shell -match "Hayabusa detections" -and $shell -match "'Raw events'") "each host gets both links"
-Assert-True ($shell -match 'set the Security Onion manager on the Raw Events tab') "a side that is not set up says so instead of offering a dead link"
+Assert-True ($shell -match 'no Elasticsearch host yet - fill in the Upload tab') "a side that is not set up says so instead of offering a dead link"
 Assert-True ($up -match '(?s)Set-KibanaLink -Base \$base -Headers \$h -Index \$idx\s+Show-UploadHostLinks') "an upload shows its hosts' links right after its own Kibana link"
 Assert-True ($up -match '"terms":\{"field":"host\.name"') "the Upload tab takes the hosts, every name form, from the index"
 Assert-True ($up -match 'dataview_id = \[string\]\$script:DetectionsDataViewId' -and $up -match '\$c\.dataview_id') "the detections data view is remembered across restarts"
-Assert-True ($so -match 'Show-HostLinks \$pnlSoHostLinks @\(Get-EvtxHostNames') "a raw import shows the links for the machines named in its EVTX"
+

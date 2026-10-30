@@ -266,6 +266,9 @@ function New-IndexName([string]$Label, [string[]]$Taken) {
     # Reusing an index name mixes unrelated cases and makes counts meaningless,
     # so the date plus a collision check keeps every import distinct.
     $lab  = ConvertTo-IndexLabel $Label
+    # Never a name in hayabusa-raw-*: the raw events' index template would
+    # map the detections, and the detections data view leaves that pattern out.
+    if ($lab -match '^raw(-|$)') { $lab = "detections-$lab" }
     $stem = if ($lab) { "hayabusa-$lab-" } else { "hayabusa-" }
     $base = "$stem$(Get-Date -Format 'yyyyMMdd')"
     if ($Taken -notcontains $base) { return $base }
@@ -353,6 +356,20 @@ function Test-Ip([string]$Value) {
     if ($v -in @('', '-', '::')) { return $false }
     $out = [ref]([System.Net.IPAddress]::Loopback)
     return [System.Net.IPAddress]::TryParse($v, $out)
+}
+
+function ConvertTo-PlainIp($Value) {
+    # An IPv4-mapped address (::ffff:10.1.2.3 - how Kerberos and logon events
+    # write the client) as plain IPv4, so one source IP matches across event
+    # types. Anything else as it was. as_ip() in scripts/hayabusa_to_ecs.py
+    # does the same.
+    $v = "$Value".Trim()
+    $ip = $null
+    if (-not [System.Net.IPAddress]::TryParse($v, [ref]$ip)) { return $Value }
+    if ($ip.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6 -and $ip.IsIPv4MappedToIPv6) {
+        return $ip.MapToIPv4().ToString()
+    }
+    return $Value
 }
 
 function ConvertTo-LongPath([string]$Path) {
@@ -537,6 +554,16 @@ function ConvertTo-EcsDocument($Doc, [string]$ImportId, [hashtable]$Aliases) {
     if ($others.Count)  { $out.hayabusa.mitre_tags = @($others) }
     if ($Doc.OtherTags) { $out.tags = @(@($Doc.OtherTags) | Where-Object { $_ }) }
 
+    Add-EcsPromotedFields $out $details $extra "$($Doc.EventID)" "$($Doc.Channel)" "$($Doc.Computer)"
+    return $out
+}
+
+function Add-EcsPromotedFields($out, $details, $extra, [string]$EventId, [string]$Channel, [string]$Computer) {
+    # The ECS fields promoted from an event's own fields - user, source,
+    # destination, process, file, service, registry, dns, PowerShell, logon
+    # type, related.* - written into $out. Shared by detections ($details =
+    # Hayabusa's Details, $extra = ExtraFieldInfo) and raw events ($details =
+    # every field of the event), so one query finds both.
     # --- promoted ECS fields ---
     $users = @(); $ips = @(); $hosts = @()
     $user = [ordered]@{}
@@ -544,7 +571,7 @@ function ConvertTo-EcsDocument($Doc, [string]$ImportId, [hashtable]$Aliases) {
     # full name falls back to them ("Logon Failure (Unknown Reason)"). On
     # Sysmon 10 SrcUser is the account doing the access, TgtUser the owner of
     # the process accessed (often SYSTEM) - the actor is the one to hunt.
-    $short = if ("$($Doc.EventID)" -eq '10' -and "$($Doc.Channel)" -like '*Sysmon*') { @('SrcUser','TgtUser') } else { @('TgtUser','SrcUser') }
+    $short = if ($EventId -eq '10' -and $Channel -like '*Sysmon*') { @('SrcUser','TgtUser') } else { @('TgtUser','SrcUser') }
     $userKeys = @('TargetUserName','SubjectUserName','User','AccountName') + $short
     $un = Get-Field $details $userKeys
     if ($un) { $user.name = $un }
@@ -556,14 +583,14 @@ function ConvertTo-EcsDocument($Doc, [string]$ImportId, [hashtable]$Aliases) {
         if ($v -is [string] -and $v -and $users -notcontains $v) { $users += $v }
     }
 
-    $sip = Get-Field $details @('IpAddress','SourceIp','SrcIP','ClientAddress')
+    $sip = ConvertTo-PlainIp (Get-Field $details @('IpAddress','SourceIp','SrcIP','ClientAddress'))
     if ((Test-Ip "$sip")) {
         $src = [ordered]@{ ip = "$sip" }
         $p = ConvertTo-Int (Get-Field $details @('IpPort','SourcePort','SrcPort'))
         if ($null -ne $p) { $src.port = $p }
         $out.source = $src; $ips += "$sip"
     }
-    $dip = Get-Field $details @('DestinationIp','TgtIP','DestAddress')
+    $dip = ConvertTo-PlainIp (Get-Field $details @('DestinationIp','TgtIP','DestAddress'))
     if ((Test-Ip "$dip")) {
         $dst = [ordered]@{ ip = "$dip" }
         $p = ConvertTo-Int (Get-Field $details @('DestinationPort','TgtPort'))
@@ -607,7 +634,7 @@ function ConvertTo-EcsDocument($Doc, [string]$ImportId, [hashtable]$Aliases) {
     # logon type on 4624/4625/4634 but a WMI or firewall type elsewhere, and
     # "Query" is a DNS name only on Sysmon 22 - Sysmon 19 and WMI 5859 use it
     # for WMI queries.
-    $eid = "$($Doc.EventID)"
+    $eid = $EventId
 
     $lt = & $any @(@('LogonType') + $(if ($eid -in '4624', '4625', '4634') { 'Type' }))
     if ($null -ne $lt) {
@@ -637,15 +664,13 @@ function ConvertTo-EcsDocument($Doc, [string]$ImportId, [hashtable]$Aliases) {
 
     $wks = Get-Field $details @('WorkstationName','SrcComp')
     if ($wks -is [string] -and $wks) { $hosts += $wks }
-    if ($Doc.Computer) { $hosts += $Doc.Computer }
+    if ($Computer) { $hosts += $Computer }
 
     $rel = [ordered]@{}
     if ($users.Count) { $rel.user  = @(Get-DedupedCI $users) }
     if ($ips.Count)   { $rel.ip    = @(Get-DedupedCI $ips) }
     if ($hosts.Count) { $rel.hosts = @(Get-DedupedCI $hosts) }
     if ($rel.Count)   { $out.related = $rel }
-
-    return $out
 }
 
 # Winlogbeat's names for the logon types, so a filter reads
@@ -817,8 +842,8 @@ function Test-TargetName([string]$Name) {
     # A host name, FQDN, IPv4 or IPv6 address - nothing else. A target list
     # can come from someone else's file, and the name goes into TrustedHosts
     # ('*' would trust every host for the run), into the evidence folder's
-    # path ('..\x' would climb out of it) and onto plink's command line ('-x'
-    # would be read as an option). Must start with a letter or digit.
+    # path ('..\x' would climb out of it) and onto command lines ('-x' would be
+    # read as an option). Must start with a letter or digit.
     return ("$Name" -match '^[A-Za-z0-9][A-Za-z0-9._:-]*$')
 }
 
@@ -1054,8 +1079,9 @@ function Read-ToolSettings([string]$Path) {
                             # Notepad with the run log when a job ends (Stop-UiJob).
                             OpenRunLog = 'on'
                             # The job queue's switches. Archive deletes
-                            # the original EVTX (after a verified zip) and raw import sends
-                            # them to another server, so those two are the operator's choice.
+                            # the original EVTX (after a verified zip) and raw events are
+                            # many times the detections' volume, so those two are the
+                            # operator's choice.
                             AutoConvert = 'on'; AutoUpload = 'on'; AutoRaw = 'off'; AutoArchive = 'off' }
     try {
         $c = [IO.File]::ReadAllText($Path) | ConvertFrom-Json
@@ -1327,7 +1353,7 @@ function New-DiscoverUrl {
 }
 
 # ------------------------------------------------------------- host links ---
-# After an upload or a raw import, EVTXER itself shows each
+# After an upload, EVTXER itself shows each
 # host's links - its Hayabusa detections in Kibana and its raw events in
 # Security Onion - "as far back as possible", so every collection of that host
 # is on one timeline. Keyed on the machine's own name from the events, not the
@@ -1388,46 +1414,14 @@ function New-HostDetectionsUrl {
     return "https://$authority/kibana/app/discover#/?_g=$(& $esc $g)&_a=$(& $esc $a)"
 }
 
-function New-HostRawUrl {
-    # Security Onion's dashboards on this host's raw events, all time - the
-    # same page so-import-evtx links to, with the same &t= form
-    # (Get-SoWideLink), so it opens the way the importer's own link does.
-    param([string]$SoHost, [string[]]$Names, [datetime]$NowUtc = [datetime]::UtcNow)
-    # winlog.computer_name, NOT host.name: in Security Onion's imported raw
-    # events host.name is the Security Onion box that ingested them
-    # ("manager"), and the Windows machine is only in winlog.computer_name.
-    # Seen on a real SO 2.4.211 import, 2026-10-16. (Our detections carry
-    # the event's Computer in host.name, so their link keeps that.)
-    $q = [uri]::EscapeDataString((Get-HostLinkQuery $Names 'winlog.computer_name') + ' | groupby event.dataset')
-    $to = $NowUtc.Date.AddDays(1)
-    # Built by hand: in a .NET date format the F of %2F is itself a code.
-    $t = '1970%2F01%2F01%2000%3A00%3A00%20AM%20-%20' + ('{0:yyyy}%2F{0:MM}%2F{0:dd}' -f $to) + '%2000%3A00%3A00%20AM'
-    return "https://$SoHost/#/dashboards?q=$q&t=$t&z=UTC"
-}
+$script:RawDataViewId = 'hayabusa-raw-dataview'
 
-function Get-EvtxHostNames([string]$Folder) {
-    # The machines whose logs sit in $Folder, as they name themselves: the
-    # Computer of the first event in one .evtx per folder (Get-WinEvent reads
-    # one record in milliseconds). For the Raw Events tab, which has no index
-    # to ask.
-    $names = @()
-    if (-not $Folder -or -not (Test-Path -LiteralPath $Folder)) { return $names }
-    # The folder and its host folders - the collect layout. Not recursive: a
-    # deep tree or a share would hold the window up (this runs on its thread).
-    $dirs = @(Get-Item -LiteralPath $Folder) + @(Get-ChildItem -LiteralPath $Folder -Directory -ErrorAction SilentlyContinue | Select-Object -First 200)
-    foreach ($d in $dirs) {
-        # Biggest first: an empty log (69,632 bytes, header only) has no
-        # event to ask, and a big one surely has.
-        $files = Get-ChildItem -LiteralPath $d.FullName -Filter *.evtx -File -ErrorAction SilentlyContinue |
-                 Where-Object { $_.Extension -eq '.evtx' } | Sort-Object Length -Descending | Select-Object -First 5
-        foreach ($f in $files) {
-            try {
-                $e = Get-WinEvent -Path ([WildcardPattern]::Escape($f.FullName)) -MaxEvents 1 -ErrorAction Stop
-                if ($e.MachineName) { $names += $e.MachineName; break }
-            } catch { }
-        }
-    }
-    return @($names | Select-Object -Unique)
+function New-HostRawUrl {
+    # Kibana Discover on this host's raw events (hayabusa-raw-*), all time:
+    # the detections' link on the raw data view, whose id the dashboards file
+    # fixes. host.name is the Windows machine in EVTXER's raw events.
+    param([string]$KibanaHost, [string[]]$Names, [int]$Port = 443)
+    return New-HostDetectionsUrl -KibanaHost $KibanaHost -DataViewId $script:RawDataViewId -Names $Names -Port $Port
 }
 
 # ----------------------------------------------------------------- Takajo ---
@@ -1617,6 +1611,13 @@ function Get-JsonlKind([string]$Path, [int]$SampleLines = 5) {
         return @{ Kind = 'Empty'; Reason = 'The file is empty.' }
     }
 
+    # Hayabusa's search export (every event, Get-HayabusaRawExportArgs): a
+    # record over three lines, so no line of it is JSON on its own.
+    if ($sampled[0].Trim() -match '^[{}]+$' -and @($sampled | Where-Object { $_ -match '^\s*"Timestamp":.*"AllFieldInfo":' }).Count) {
+        return @{ Kind = 'RawExport'
+                  Reason = "This is Hayabusa's raw event export, not the converted file. Convert it first (raw-ecs.jsonl)." }
+    }
+
     # Classify on the first line that parses. PS 5.1 ConvertFrom-Json rejects a
     # line containing a "" key outright - the bug that once dropped 107
     # documents - so a single unparseable line must not decide the verdict.
@@ -1628,6 +1629,9 @@ function Get-JsonlKind([string]$Path, [int]$SampleLines = 5) {
         $parsedAny = $true
 
         $names = @($doc.PSObject.Properties.Name)
+        if (($names -contains '@timestamp') -and $doc.event -and $doc.event.dataset -eq 'evtx.raw') {
+            return @{ Kind = 'Raw'; Reason = 'Raw Windows events (every event, not only detections) - ready to upload to the raw index.' }
+        }
         $hasEcs = ($names -contains '@timestamp') -and ($names -contains 'ecs') -and ($names -contains 'hayabusa')
         if ($hasEcs) {
             return @{ Kind = 'Ecs'; Reason = 'Hayabusa ECS JSONL - ready to upload.' }
@@ -3056,8 +3060,7 @@ function Initialize-ProcessPump {
     # stdin is redirected and closed at once: a program that stops to ask a
     # question gets end-of-file instead of waiting forever on a prompt nobody
     # can see. The one exception is text the caller hands over to be written
-    # there first - sudo's password for the Raw Events tab, which must not
-    # appear on a command line.
+    # there first - a secret that must not appear on a command line.
     if (-not ('EvtxerProcessPump' -as [type])) {
         Add-Type -ErrorAction Stop @"
 using System;
@@ -3260,6 +3263,578 @@ function ConvertTo-LogPaneWidth([string]$Text, [double]$Default = 460, [double]$
     return [Math]::Min($Max, [Math]::Max($Min, $w))
 }
 
+# ----------------------------------------------------------- raw events ---
+# Every event of a log, not only the ones a rule matched (v81). Hayabusa's
+# search command exports them (Get-HayabusaRawExportArgs) with every field;
+# each becomes a document in hayabusa-raw-<mission> with a curated set of
+# them - the allow-list below - promoted to the same ECS names detections use
+# (Add-EcsPromotedFields), so one query works on both indices. Measured on
+# the 599-file sample corpus: the export holds every record Windows' own
+# reader counts (47,699), under 766 distinct field names; the list keeps 189.
+# Parsed with JavaScriptSerializer, not ConvertFrom-Json: 45,000 records/s
+# against 1,270, and ConvertFrom-Json rejects a record with an empty field
+# name outright (3,400 of 20,000 on one workstation's logs).
+
+$script:RawEventFields = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+foreach ($f in @(
+    # logons, failures, explicit credentials, privileges
+    'TargetUserName', 'TargetDomainName', 'TargetUserSid', 'SubjectUserName', 'SubjectDomainName', 'SubjectUserSid',
+    'SubjectLogonId', 'TargetLogonId', 'LogonGuid', 'LogonType', 'LogonProcessName', 'AuthenticationPackageName',
+    'LmPackageName', 'KeyLength', 'WorkstationName', 'Workstation', 'IpAddress', 'IpPort', 'Status', 'SubStatus',
+    'FailureReason', 'ElevatedToken', 'ImpersonationLevel', 'RestrictedAdminMode', 'VirtualAccount',
+    'TargetOutboundUserName', 'TargetServerName', 'TargetInfo', 'PrivilegeList',
+    # Kerberos, KDC side (4768-4773, KDC System events)
+    'TargetSid', 'ServiceName', 'ServiceSid', 'TicketOptions', 'TicketEncryptionType', 'PreAuthType',
+    'TransmittedServices', 'CertIssuerName', 'CertSerialNumber', 'CertThumbprint', 'AccountSupportedEncryptionTypes',
+    'AccountAvailableKeys', 'ServiceSupportedEncryptionTypes', 'ServiceAvailableKeys', 'DCSupportedEncryptionTypes',
+    'DCAvailableKeys', 'ClientAdvertizedEncryptionTypes', 'SessionKeyEncryptionType', 'PreAuthEncryptionType',
+    'ResponseTicket', 'AccountName', 'CertificateSubject', 'CertificateIssuer', 'CertificateSerialNumber',
+    'CertificateThumbprint',
+    # accounts, groups, delegation, SID history
+    'SamAccountName', 'MemberName', 'MemberSid', 'UserAccountControl', 'OldUacValue', 'NewUacValue', 'SidHistory',
+    'ServicePrincipalNames', 'AllowedToDelegateTo', 'DnsHostName',
+    # directory changes, DCSync, object access, permissions
+    'ObjectName', 'ObjectType', 'ObjectServer', 'ObjectDN', 'ObjectClass', 'ObjectGUID', 'AttributeLDAPDisplayName',
+    'AttributeValue', 'OpCorrelationID', 'Properties', 'AccessMask', 'AccessList', 'OperationType', 'NewSd', 'OldSd',
+    # trusts, certificate services
+    'DomainName', 'DomainSid', 'TdoType', 'TdoDirection', 'TdoAttributes', 'RequestId', 'Requester', 'Attributes',
+    'Disposition', 'CertificateTemplate', 'SubjectKeyIdentifier', 'TemplateContent',
+    # processes
+    'NewProcessName', 'NewProcessId', 'ProcessName', 'ProcessId', 'CommandLine', 'ParentProcessName',
+    'TokenElevationType', 'MandatoryLabel', 'Image', 'ParentImage', 'ParentCommandLine', 'ParentProcessId',
+    'ParentUser', 'OriginalFileName', 'Product', 'Company', 'Description', 'FileVersion', 'IntegrityLevel', 'User',
+    'LogonId', 'Hashes', 'CurrentDirectory', 'ProcessGuid', 'ParentProcessGuid',
+    # registry
+    'ObjectValueName', 'OldValue', 'NewValue', 'TargetObject', 'Details', 'EventType', 'NewName',
+    # files
+    'TargetFilename', 'CreationUtcTime', 'PreviousCreationUtcTime', 'Contents', 'Hash', 'IsExecutable', 'Archived',
+    # injection, credential access, tampering
+    'SourceImage', 'TargetImage', 'SourceProcessGuid', 'TargetProcessGuid', 'StartAddress', 'StartModule',
+    'StartFunction', 'GrantedAccess', 'CallTrace', 'Type',
+    # drivers, DLLs, code integrity, AppLocker
+    'ImageLoaded', 'Signed', 'Signature', 'SignatureStatus', 'FilePath', 'FullFilePath', 'PolicyName', 'Fqbn',
+    # network, DNS
+    'SourceIp', 'SourcePort', 'SourceHostname', 'DestinationIp', 'DestinationPort', 'DestinationHostname', 'Protocol',
+    'Initiated', 'Application', 'Direction', 'QueryName', 'QueryResults', 'QueryStatus',
+    # services, scheduled tasks
+    'ImagePath', 'ServiceFileName', 'ServiceType', 'StartType', 'ServiceAccount', 'param1', 'param2', 'param3',
+    'param4', 'TaskName', 'TaskContent', 'TaskContentNew', 'ActionName', 'UserContext',
+    # WMI persistence
+    'EventNamespace', 'Name', 'Query', 'Destination', 'Consumer', 'Filter', 'Operation', 'PossibleCause', 'Namespace',
+    'ESS', 'CONSUMER',
+    # PowerShell (4103/4104, and the classic log's text - see $script:PsClassicPattern)
+    'ScriptBlockText', 'ScriptBlockId', 'MessageNumber', 'MessageTotal', 'Path', 'Payload', 'ContextInfo',
+    'HostApplication', 'EngineVersion', 'CommandName', 'CommandType', 'ScriptName',
+    # shares
+    'ShareName', 'ShareLocalPath', 'RelativeTargetName',
+    # log clearing (104 names the cleared log in Channel), audit policy, Defender, firewall
+    'Channel', 'BackupPath', 'CategoryId', 'SubcategoryGuid', 'AuditPolicyChanges', 'Threat Name', 'Severity Name',
+    'Category Name', 'Process Name', 'Detection User', 'Action Name', 'Error Description', 'Old Value', 'New Value',
+    'RuleName', 'ApplicationPath', 'ModifyingApplication', 'LocalPorts', 'RemotePorts', 'Action',
+    # RDP, BITS
+    'Address', 'SessionID', 'Param1', 'Param2', 'Param3', 'Value', 'url', 'name', 'transferId', 'fileTime',
+    'jobOwner', 'jobTitle'
+)) { [void]$script:RawEventFields.Add($f) }
+
+# The classic "Windows PowerShell" log (400/403/600/800) writes its fields as
+# Key=Value text inside Data[n] - on Windows 7 without WMF 5.1 the only
+# PowerShell trail there is. Every key it writes, so each value ends where
+# the next key starts (HostApplication's value has spaces and = in it).
+$script:PsClassicKeys = @('NewEngineState', 'PreviousEngineState', 'SequenceNumber', 'HostName', 'HostVersion',
+    'HostId', 'HostApplication', 'EngineVersion', 'RunspaceId', 'PipelineId', 'CommandName', 'CommandType',
+    'ScriptName', 'CommandPath', 'CommandLine', 'ProviderName', 'NewProviderState', 'DetailSequence',
+    'DetailTotal', 'UserId', 'NewCommandState')
+$script:PsClassicPattern = [regex]("(?:^|\s)($($script:PsClassicKeys -join '|'))=(.*?)(?=\s+(?:$($script:PsClassicKeys -join '|'))=|\s*$)")
+
+function Get-RawIndexName([string]$Mission) {
+    # The mission's raw events, beside its detections (Get-MissionIndexName).
+    # Under hayabusa-* on purpose: the write guard and the upload accounts
+    # are limited to it. The detection data view leaves it out instead
+    # (hayabusa-*,-hayabusa-raw-*).
+    $lab = ConvertTo-IndexLabel $Mission
+    if (-not $lab) { return '' }
+    return "hayabusa-raw-$lab"
+}
+
+function Get-HayabusaRawExportArgs {
+    # Every event of the folder(s), every field, UTC, one record per line of
+    # members (see ConvertFrom-RawRecordLine). No rules are loaded: -r .*
+    # matches any event. -Q: no error-log file per run. Like the scan, -d once
+    # per folder.
+    param([string[]]$EvtxDir, [string]$OutFile)
+    $a = @('search')
+    foreach ($d in @($EvtxDir)) { $a += @('-d', $d) }
+    return ,($a + @('-r', '.*', '-L', '-O', '-b', '-q', '-K', '-C', '-Q', '-o', $OutFile))
+}
+
+function Get-RawExportProblem($Export) {
+    # '' when Invoke-RawEventExport's result is complete, or what is wrong -
+    # said on the tab, the queue row and the activity log, never a quiet green.
+    if ($Export.Cancelled) { return 'cancelled' }
+    if (-not $Export.Ok) { return $Export.Detail }
+    if ($Export.Bad -and -not $Export.Converted) { return "none of the $('{0:N0}' -f $Export.Bad) exported record(s) could be read" }
+    if ($Export.Bad) { return "$('{0:N0}' -f $Export.Bad) record(s) of the export could not be read" }
+    return ''
+}
+
+function Get-StaleDetectionsViewWarning([string]$Base, $Headers) {
+    # '' or a warning: Kibana still has the detections data view from before
+    # v81 (hayabusa-*, without -hayabusa-raw-*), so every detection dashboard
+    # would count raw events as detections. Read over the Elasticsearch login
+    # (.kibana), like Set-KibanaLink; an account that cannot read it says
+    # nothing - the warning is a courtesy, never a stop.
+    try {
+        $resp = Invoke-EsJson -Uri "$Base/.kibana*/_search" -Method Post -Headers $Headers -ContentType 'application/json' -TimeoutSec 30 `
+                    -Body '{"size":5,"query":{"ids":{"values":["index-pattern:hayabusa-evtx-dataview"]}},"_source":["index-pattern.title"]}'
+        foreach ($hit in @($resp.hits.hits)) {
+            $title = "$($hit._source.'index-pattern'.title)"
+            if ($title -and (Test-IndexCoveredByPattern 'hayabusa-raw-x' $title)) {
+                return "Kibana still has the dashboards from before v81: their detections data view ($title) counts raw events as detections. Import the dashboards again (Dashboards tab)."
+            }
+        }
+    } catch { }
+    return ''
+}
+
+function Get-RawExportSpaceProblem([string[]]$EvtxDir, [string]$WorkDir) {
+    # '' when the drive holding WorkDir can take the export, or why not. The
+    # export (~0.4x the EVTX, measured) and its conversion (~0.6x) are on disk
+    # together until the export is deleted: room for 1.5x the EVTX is asked.
+    $bytes = [long]0
+    foreach ($d in @($EvtxDir)) {
+        foreach ($f in Get-ChildItem -LiteralPath $d -Recurse -File -Filter '*.evtx' -ErrorAction SilentlyContinue) { $bytes += $f.Length }
+    }
+    $free = Get-FreeSpaceBytes $WorkDir
+    if ($free -lt 0 -or $free -ge [long]($bytes * 1.5)) { return '' }
+    return "the raw events of $(Format-ByteSize $bytes) of EVTX need about $(Format-ByteSize ([long]($bytes * 1.5))) free beside the results, and $(Split-Path -Qualifier ([IO.Path]::GetFullPath($WorkDir))) has $(Format-ByteSize $free)"
+}
+
+function Invoke-RawEventExport {
+    # The raw events of one or more EVTX folders as <WorkDir>\raw-ecs.jsonl:
+    # Hayabusa's search export, then the compiled conversion; the export is
+    # deleted once converted. Used by the job queue's raw step and the Convert
+    # tab. -Run runs one program from a hashtable of Invoke-ExternalTool's
+    # parameters and returns its exit code (-1 = cancelled), so the tab hands
+    # it Invoke-ExternalTool and the queue Invoke-PumpedTool. -OnProgress
+    # ($done, $total) returns $true to cancel.
+    param([string[]]$EvtxDir, [string]$WorkDir, [string]$HayabusaExe, [string]$ImportId,
+          [scriptblock]$Run, [scriptblock]$OnProgress, [scriptblock]$Log)
+    if (-not $Log) { $Log = { param($t, $k) } }
+    $r = [pscustomobject]@{ Ok = $false; Cancelled = $false; Detail = ''; Path = ''; Converted = [long]0; Bad = [long]0; Workers = 0 }
+    $export = Join-Path $WorkDir 'raw.jsonl'
+    $r.Path = Join-Path $WorkDir 'raw-ecs.jsonl'
+    # An earlier run's file must never pass for this one's (review, v81).
+    Remove-Item -LiteralPath $r.Path, $export -Force -ErrorAction SilentlyContinue
+    $space = Get-RawExportSpaceProblem $EvtxDir $WorkDir
+    if ($space) { $r.Detail = "not enough disk: $space"; return $r }
+    try {
+        & $Log "`nExporting every event (Hayabusa search)...`n" 'info'
+        $code = & $Run @{ Label = 'Hayabusa raw export'; Exe = $HayabusaExe; Arguments = (Get-HayabusaRawExportArgs -EvtxDir $EvtxDir -OutFile $export) }
+        if ($code -eq -1) { $r.Cancelled = $true; return $r }
+        if ($code -ne 0) { $r.Detail = "Hayabusa's raw export exited with code $code"; return $r }
+        if (-not (Test-Path -LiteralPath $export)) {
+            # No event at all (empty logs): nothing to convert, nothing wrong.
+            [IO.File]::WriteAllText($r.Path, '')
+            $r.Ok = $true; $r.Detail = 'no events in these logs'; return $r
+        }
+        & $Log "Converting the raw events ($(Format-ByteSize (Get-Item -LiteralPath $export).Length) exported)...`n" 'info'
+        $c = Convert-HayabusaJsonlToEcs -Raw -Source $export -Destination $r.Path -ImportId $ImportId -OnProgress $OnProgress
+        if ($c.Cancelled) { $r.Cancelled = $true; return $r }
+        $r.Converted = [long]$c.Converted; $r.Bad = [long]$c.Bad; $r.Workers = $c.Workers
+        $r.Ok = $true
+        $r.Detail = "$('{0:N0}' -f $r.Converted) raw event(s)$(if ($r.Bad) { ", $('{0:N0}' -f $r.Bad) record(s) unreadable" })"
+        & $Log "$($r.Detail) -> $($r.Path)`n" $(if ($r.Bad) { 'warn' } else { 'ok' })
+    } finally {
+        Remove-Item -LiteralPath $export -Force -ErrorAction SilentlyContinue
+        if (-not $r.Ok) { Remove-Item -LiteralPath $r.Path -Force -ErrorAction SilentlyContinue }
+    }
+    return $r
+}
+
+# The raw-event converter, compiled. In PowerShell one document took 2.5 ms
+# (389/s per worker, measured on the sample corpus) - about 4 h of
+# conversion for a 44 GB mission on 15 workers. Its promotion rules are
+# Add-EcsPromotedFields' (the detections'), ported line for line; a test runs
+# both on the same events and requires the same fields (RawEvents.Tests).
+# C# 5: what PowerShell 5.1's Add-Type compiles.
+$script:RawConverterSource = @'
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Web.Script.Serialization;
+
+public static class EvtxerRawConverter {
+    static HashSet<string> allow = new HashSet<string>(StringComparer.Ordinal);
+    static Regex psClassic;
+    static JavaScriptSerializer json;
+    static SHA1 sha = SHA1.Create();
+    static readonly string[] placeholders = { "", "-", "n/a", "N/A" };
+    static readonly Regex hashPair = new Regex(@"(\w+)=([0-9a-fA-F]+)");
+    static readonly Regex quoted = new Regex("^\"([^\"]+)\"");
+    static readonly Regex binary = new Regex(@"^(.+?\.(exe|dll|sys|com|scr|bat|cmd|ps1))(\s|$)", RegexOptions.IgnoreCase);
+    static readonly Regex leadingNumber = new Regex(@"^\s*(\d+)");
+    static readonly Regex dataN = new Regex(@"^Data\[(\d+)\]$");
+    static readonly Dictionary<long, string> logonNames = new Dictionary<long, string> {
+        {0, "System"}, {2, "Interactive"}, {3, "Network"}, {4, "Batch"}, {5, "Service"}, {7, "Unlock"},
+        {8, "NetworkCleartext"}, {9, "NewCredentials"}, {10, "RemoteInteractive"}, {11, "CachedInteractive"},
+        {12, "CachedRemoteInteractive"}, {13, "CachedUnlock"} };
+
+    public static void Configure(string[] allowList, string psClassicPattern) {
+        allow = new HashSet<string>(allowList, StringComparer.Ordinal);
+        psClassic = new Regex(psClassicPattern);
+    }
+
+    static JavaScriptSerializer Json {
+        get {
+            if (json == null) { json = new JavaScriptSerializer(); json.MaxJsonLength = int.MaxValue; }
+            return json;
+        }
+    }
+
+    // ---- reading ----
+    public static IDictionary<string, object> Parse(string line) {
+        if (line == null) return null;
+        string t = line.Trim();
+        if (t.Length == 0 || t.Trim('{', '}').Length == 0) return null;
+        if (t[0] != '{') t = "{" + t + "}";
+        return Json.DeserializeObject(t) as IDictionary<string, object>;
+    }
+
+    public static string Serialize(object doc) { return Json.Serialize(doc); }
+
+    public static string ConvertLine(string line, string importId, string ingested, string version) {
+        IDictionary<string, object> rec = Parse(line);
+        if (rec == null) return null;
+        return Json.Serialize(ToDocument(rec, importId, ingested, version));
+    }
+
+    // ---- PowerShell's semantics, as the PowerShell converter relies on them ----
+    static object Get(IDictionary<string, object> d, string k) { object v; return d.TryGetValue(k, out v) ? v : null; }
+
+    static string Str(object v) {           // "$v"
+        if (v == null) return "";
+        string s = v as string; if (s != null) return s;
+        if (v is bool) return (bool)v ? "True" : "False";
+        IFormattable f = v as IFormattable; if (f != null) return f.ToString(null, CultureInfo.InvariantCulture);
+        IEnumerable e = v as IEnumerable;
+        if (e != null) { List<string> parts = new List<string>(); foreach (object i in e) parts.Add(Str(i)); return string.Join(" ", parts); }
+        return v.ToString();
+    }
+
+    static bool IsPlaceholder(string s) {
+        foreach (string p in placeholders) if (string.Equals(p, s, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    static bool Truthy(object v) {          // if ($v)
+        if (v == null) return false;
+        string s = v as string; if (s != null) return s.Length > 0;
+        if (v is bool) return (bool)v;
+        if (v is int || v is long || v is decimal || v is double) return Convert.ToDecimal(v, CultureInfo.InvariantCulture) != 0;
+        return true;
+    }
+
+    static object Scalar(object v) {        // Get-Scalar
+        if (v == null) return null;
+        string s = v as string;
+        if (s != null) return IsPlaceholder(s.Trim()) ? null : s;
+        IEnumerable e = v as IEnumerable;
+        if (e == null) return v;
+        List<object> keep = new List<object>();
+        foreach (object i in e) {
+            if (i == null) continue;
+            string si = i as string;
+            if (si != null && IsPlaceholder(si.Trim())) continue;
+            bool seen = false;
+            foreach (object k in keep) {
+                string sk = k as string;
+                if (si != null && sk != null ? string.Equals(si, sk, StringComparison.OrdinalIgnoreCase) : k.Equals(i)) { seen = true; break; }
+            }
+            if (!seen) keep.Add(i);
+        }
+        if (keep.Count == 0) return null;
+        if (keep.Count == 1) return keep[0];
+        List<string> parts = new List<string>(); foreach (object k in keep) parts.Add(Str(k));
+        return string.Join(" | ", parts);
+    }
+
+    static object Field(IDictionary d, params string[] names) {   // Get-Field
+        if (d == null) return null;
+        foreach (string n in names) {
+            if (!d.Contains(n)) continue;
+            object v = Scalar(d[n]);
+            if (v != null && Str(v) != "") return v;
+        }
+        return null;
+    }
+
+    static object Any(IDictionary details, IDictionary extra, params string[] names) {
+        object v = Field(details, names);
+        return v ?? Field(extra, names);
+    }
+
+    static object ToInt(object v) {         // ConvertTo-Int
+        if (v == null) return null;
+        if (v is int || v is long) return Convert.ToInt64(v);
+        string s = Str(v).Trim();
+        try {
+            if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) return Convert.ToInt64(s.Substring(2), 16);
+            long l; if (long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out l)) return l;
+            double d; if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out d)) return Convert.ToInt64(d);
+        } catch (Exception) { }
+        return null;
+    }
+
+    static bool IsIp(string v) {            // Test-Ip
+        if (string.IsNullOrEmpty(v)) return false;
+        string t = v.Trim();
+        if (t == "" || t == "-" || t == "::") return false;
+        IPAddress ip; return IPAddress.TryParse(t, out ip);
+    }
+
+    static object PlainIp(object v) {       // ConvertTo-PlainIp
+        string t = Str(v).Trim(); IPAddress ip;
+        if (!IPAddress.TryParse(t, out ip)) return v;
+        if (ip.AddressFamily == AddressFamily.InterNetworkV6 && ip.IsIPv4MappedToIPv6) return ip.MapToIPv4().ToString();
+        return v;
+    }
+
+    static string LeafName(object path) { string[] p = Str(path).Replace('/', '\\').Split('\\'); return p[p.Length - 1]; }
+
+    static string BinaryPath(object v) {    // ConvertTo-BinaryPath
+        string s = v as string;
+        if (s == null || s.Trim() == "") return null;
+        string t = s.Trim();
+        Match m = quoted.Match(t); if (m.Success) return m.Groups[1].Value;
+        m = binary.Match(t); if (m.Success) return m.Groups[1].Value;
+        return t;
+    }
+
+    static string LogonTypeName(object v) {   // ConvertTo-LogonTypeName
+        Match m = leadingNumber.Match(Str(v)); long n;
+        if (m.Success && long.TryParse(m.Groups[1].Value, out n) && logonNames.ContainsKey(n)) return logonNames[n];
+        return Str(v).Trim();
+    }
+
+    static List<string> DedupedCI(List<string> values) {   // Get-DedupedCI
+        Dictionary<string, string> seen = new Dictionary<string, string>();
+        List<string> keys = new List<string>();
+        foreach (string v in values) { string k = v.ToLower(); if (!seen.ContainsKey(k)) { seen[k] = v; keys.Add(k); } }
+        keys.Sort((a, b) => string.Compare(a, b, CultureInfo.CurrentCulture, CompareOptions.IgnoreCase));
+        List<string> outList = new List<string>(); foreach (string k in keys) outList.Add(seen[k]);
+        return outList;
+    }
+
+    static Dictionary<string, object> D(string k, object v) { Dictionary<string, object> d = new Dictionary<string, object>(); d[k] = v; return d; }
+    static Dictionary<string, object> Child(Dictionary<string, object> d, string k) {
+        object v; if (d.TryGetValue(k, out v) && v is Dictionary<string, object>) return (Dictionary<string, object>)v;
+        Dictionary<string, object> c = new Dictionary<string, object>(); d[k] = c; return c;
+    }
+    static void AddCI(List<string> list, string v) {
+        foreach (string x in list) if (string.Equals(x, v, StringComparison.OrdinalIgnoreCase)) return;
+        list.Add(v);
+    }
+
+    // ---- Add-EcsPromotedFields, ported ----
+    public static Dictionary<string, object> PromoteOnly(IDictionary details, IDictionary extra, string eid, string channel, string computer) {
+        Dictionary<string, object> o = new Dictionary<string, object>();
+        Promote(o, details, extra, eid, channel, computer);
+        return o;
+    }
+
+    static void Promote(Dictionary<string, object> o, IDictionary details, IDictionary extra, string eid, string channel, string computer) {
+        List<string> users = new List<string>(), ips = new List<string>(), hosts = new List<string>();
+        bool sysmon10 = eid == "10" && channel.IndexOf("Sysmon", StringComparison.OrdinalIgnoreCase) >= 0;
+        string[] userKeys = sysmon10
+            ? new[] { "TargetUserName", "SubjectUserName", "User", "AccountName", "SrcUser", "TgtUser" }
+            : new[] { "TargetUserName", "SubjectUserName", "User", "AccountName", "TgtUser", "SrcUser" };
+        Dictionary<string, object> user = new Dictionary<string, object>();
+        object un = Field(details, userKeys); if (Truthy(un)) user["name"] = un;
+        object ud = Field(details, "TargetDomainName", "SubjectDomainName"); if (Truthy(ud)) user["domain"] = ud;
+        object ui = Field(details, "TargetUserSid", "SubjectUserSid"); if (Truthy(ui)) user["id"] = ui;
+        if (user.Count > 0) o["user"] = user;
+        foreach (string n in userKeys) {
+            object v = details != null && details.Contains(n) ? Scalar(details[n]) : null;
+            string s = v as string;
+            if (!string.IsNullOrEmpty(s)) AddCI(users, s);
+        }
+
+        object sip = PlainIp(Field(details, "IpAddress", "SourceIp", "SrcIP", "ClientAddress"));
+        if (IsIp(Str(sip))) {
+            Dictionary<string, object> src = D("ip", Str(sip));
+            object p = ToInt(Field(details, "IpPort", "SourcePort", "SrcPort")); if (p != null) src["port"] = p;
+            o["source"] = src; ips.Add(Str(sip));
+        }
+        object dip = PlainIp(Field(details, "DestinationIp", "TgtIP", "DestAddress"));
+        if (IsIp(Str(dip))) {
+            Dictionary<string, object> dst = D("ip", Str(dip));
+            object p = ToInt(Field(details, "DestinationPort", "TgtPort")); if (p != null) dst["port"] = p;
+            o["destination"] = dst; ips.Add(Str(dip));
+        }
+
+        Dictionary<string, object> proc = new Dictionary<string, object>();
+        object exe = Field(details, "NewProcessName", "Image", "ProcessName", "Proc");
+        if (Truthy(exe)) { proc["executable"] = exe; proc["name"] = LeafName(exe); }
+        object cl = Field(details, "CommandLine", "Cmdline"); if (Truthy(cl)) proc["command_line"] = cl;
+        object pid = ToInt(Field(details, "NewProcessId", "ProcessId", "PID")); if (pid != null) proc["pid"] = pid;
+        object pexe = Field(details, "ParentProcessName", "ParentImage", "ParentProc");
+        if (Truthy(pexe)) {
+            Dictionary<string, object> parent = D("executable", pexe); parent["name"] = LeafName(pexe);
+            object ppid = ToInt(Field(details, "ParentProcessId", "ParentPID")); if (ppid != null) parent["pid"] = ppid;
+            proc["parent"] = parent;
+        }
+        if (proc.Count > 0) o["process"] = proc;
+
+        string hashes = Field(details, "Hashes", "Hash") as string;
+        if (hashes != null && hashes.Contains("=")) {
+            Dictionary<string, object> h = new Dictionary<string, object>();
+            foreach (Match m in hashPair.Matches(hashes)) h[m.Groups[1].Value.ToLower()] = m.Groups[2].Value;
+            if (h.Count > 0) o["file"] = D("hash", h);
+        }
+
+        bool logonEvent = eid == "4624" || eid == "4625" || eid == "4634";
+        object lt = logonEvent ? Any(details, extra, "LogonType", "Type") : Any(details, extra, "LogonType");
+        if (lt != null) Child(o, "winlog")["logon"] = D("type", LogonTypeName(lt));
+        object pcl = Any(details, extra, "ParentCommandLine", "ParentCmdline");
+        if (Truthy(pcl)) Child(Child(o, "process"), "parent")["command_line"] = pcl;
+        object svc = Any(details, extra, "ServiceName", "Svc");
+        if (Truthy(svc)) o["service"] = D("name", svc);
+        string fp = BinaryPath(Any(details, extra, "TargetFilename", "ImagePath", "ServiceFileName", "Path"));
+        if (!string.IsNullOrEmpty(fp)) { Dictionary<string, object> f = Child(o, "file"); f["path"] = fp; f["name"] = LeafName(fp); }
+        object sb = Any(details, extra, "ScriptBlockText", "ScriptBlock");
+        if (Truthy(sb)) o["powershell"] = D("file", D("script_block_text", Str(sb)));
+        object reg = eid == "14" ? Any(details, extra, "TargetObject", "TgtObj", "RegKey", "OldName") : Any(details, extra, "TargetObject", "TgtObj", "RegKey");
+        if (Truthy(reg)) o["registry"] = D("path", reg);
+        object q = eid == "22" ? Any(details, extra, "QueryName", "Query") : Any(details, extra, "QueryName");
+        if (Truthy(q)) o["dns"] = D("question", D("name", q));
+
+        string wks = Field(details, "WorkstationName", "SrcComp") as string;
+        if (!string.IsNullOrEmpty(wks)) hosts.Add(wks);
+        if (!string.IsNullOrEmpty(computer)) hosts.Add(computer);
+
+        Dictionary<string, object> rel = new Dictionary<string, object>();
+        if (users.Count > 0) rel["user"] = DedupedCI(users);
+        if (ips.Count > 0) rel["ip"] = DedupedCI(ips);
+        if (hosts.Count > 0) rel["hosts"] = DedupedCI(hosts);
+        if (rel.Count > 0) o["related"] = rel;
+    }
+
+    // ---- the raw document ----
+    public static string EventId(IDictionary<string, object> rec) {
+        string key = string.Format(CultureInfo.InvariantCulture, "{0}|{1}|{2}|{3}|{4}", Str(Get(rec, "Hostname")), Str(Get(rec, "Channel")),
+                                   Str(Get(rec, "Record ID")), Str(Get(rec, "Event ID")), Str(Get(rec, "Timestamp")));
+        byte[] hash; lock (sha) { hash = sha.ComputeHash(Encoding.UTF8.GetBytes(key)); }
+        return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+    }
+
+    static Dictionary<string, object> EventData(IDictionary f, string channel) {
+        Dictionary<string, object> data = new Dictionary<string, object>();
+        foreach (DictionaryEntry e in f) {
+            string k = e.Key as string;
+            if (string.IsNullOrEmpty(k) || !allow.Contains(k)) continue;
+            object v = Scalar(e.Value);
+            if (v != null && Str(v) != "") data[k] = Str(v);
+        }
+        if (channel == "Windows PowerShell" && psClassic != null) {
+            foreach (DictionaryEntry e in f) {
+                string k = e.Key as string;
+                if (k == null || !k.StartsWith("Data[", StringComparison.OrdinalIgnoreCase)) continue;
+                foreach (Match m in psClassic.Matches(Str(e.Value))) {
+                    string name = m.Groups[1].Value, v = m.Groups[2].Value.Trim();
+                    if (v != "" && allow.Contains(name) && !data.ContainsKey(name)) data[name] = v;
+                }
+            }
+        }
+        if (data.Count == 0) {
+            foreach (DictionaryEntry e in f) {
+                string k = e.Key as string; if (k == null) continue;
+                Match m = dataN.Match(k); long n;
+                if (m.Success && long.TryParse(m.Groups[1].Value, out n) && n <= 16) {
+                    object v = Scalar(e.Value);
+                    if (v != null && Str(v) != "") data[k] = Str(v);
+                }
+            }
+        }
+        return data;
+    }
+
+    public static Dictionary<string, object> ToDocument(IDictionary<string, object> rec, string importId, string ingested, string version) {
+        IDictionary fields = Get(rec, "AllFieldInfo") as IDictionary;
+        if (fields == null) fields = new Dictionary<string, object>();
+        string eid = Str(Get(rec, "Event ID")); if (eid == "-") eid = "";
+        string channel = Str(Get(rec, "Channel")), computer = Str(Get(rec, "Hostname"));
+        Dictionary<string, object> o = new Dictionary<string, object>();
+        o["@timestamp"] = Get(rec, "Timestamp");
+        o["ecs"] = D("version", "8.11.0");
+        Dictionary<string, object> ev = D("id", EventId(rec));
+        ev["kind"] = "event"; ev["module"] = "windows"; ev["dataset"] = "evtx.raw"; ev["ingested"] = ingested;
+        o["event"] = ev;
+        o["import"] = D("id", importId);
+        Dictionary<string, object> agent = D("name", "EVTXER"); agent["type"] = "evtxer";
+        o["agent"] = agent;
+        if (eid != "") ev["code"] = eid;
+        if (!string.IsNullOrEmpty(version)) agent["version"] = version;
+        if (computer != "") { Dictionary<string, object> h = D("name", computer); h["hostname"] = computer; o["host"] = h; }
+        Dictionary<string, object> win = new Dictionary<string, object>();
+        if (channel != "") win["channel"] = channel;
+        if (eid != "") win["event_id"] = eid;
+        // A record whose number Hayabusa writes as "-" (seen in the sample corpus) has none:
+        // record_id is a long, and Elasticsearch refuses the whole document for "-".
+        object rid = ToInt(Get(rec, "Record ID")); if (rid != null) win["record_id"] = rid;
+        Dictionary<string, object> data = EventData(fields, channel);
+        if (data.Count > 0) win["event_data"] = data;
+        o["winlog"] = win;
+        object file = Get(rec, "EvtxFile"); if (Truthy(file)) o["log"] = D("file", D("path", file));
+        Promote(o, fields, null, eid, channel, computer);
+        return o;
+    }
+}
+'@
+
+function Initialize-RawConverter {
+    # Compiled once per process (a worker compiles its own); configured with
+    # the allow-list and the classic PowerShell pattern defined above, so
+    # those live in one place.
+    if (-not ('EvtxerRawConverter' -as [type])) {
+        Add-Type -ReferencedAssemblies System.Web.Extensions -TypeDefinition $script:RawConverterSource
+    }
+    [EvtxerRawConverter]::Configure([string[]]@($script:RawEventFields), $script:PsClassicPattern.ToString())
+    $script:RawConverterReady = $true
+}
+
+function ConvertFrom-RawRecordLine([string]$Line) {
+    # One record of Hayabusa's search export, or $null for the lines between
+    # records. It writes a record over three lines - "{", its members on one
+    # line, "}" - and sometimes glues two together with a "}{" line. A whole
+    # object on one line is read as it is.
+    if (-not $script:RawConverterReady) { Initialize-RawConverter }
+    return [EvtxerRawConverter]::Parse($Line)
+}
+
+function ConvertTo-RawEcsLine($Doc) {
+    if (-not $script:RawConverterReady) { Initialize-RawConverter }
+    return [EvtxerRawConverter]::Serialize($Doc)
+}
+
+
+function ConvertTo-RawEcsDocument($Rec, [string]$ImportId) {
+    # One record of the export (ConvertFrom-RawRecordLine) as the document
+    # stored in hayabusa-raw-<mission>: the allow-listed fields as text, the
+    # classic PowerShell log's Key=Value fields pulled out, Data[1]..Data[16]
+    # kept only when an event has no named field, and the ECS fields promoted
+    # as for detections. event first, id first in it: the upload reads the id
+    # without parsing the line (Get-EcsLineId).
+    if (-not $script:RawConverterReady) { Initialize-RawConverter }
+    $ingested = if ($script:RawIngested) { $script:RawIngested } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ') }
+    return [EvtxerRawConverter]::ToDocument($Rec, $ImportId, $ingested, "$script:ToolVersion")
+}
+
 # ------------------------------------------------------- ECS conversion ---
 function Convert-EcsRange {
     # The per-line work of Convert-HayabusaJsonlToEcs, over the lines
@@ -3280,9 +3855,18 @@ function Convert-EcsRange {
         [long]$Take = [long]::MaxValue,
         # Called about every 100 ms with the number of documents written so
         # far. Returning $true stops the range.
-        [scriptblock]$OnTick
+        [scriptblock]$OnTick,
+        # Hayabusa's search export (every event) into raw-event documents,
+        # instead of detections - see ConvertTo-RawEcsDocument.
+        [switch]$Raw
     )
     $n = 0; $bad = 0; $recovered = 0; $tagged = 0; $cancelled = $false
+    # One event.ingested for the range: the clock per document costs more
+    # than the rest of a raw document.
+    if ($Raw) {
+        $script:RawIngested = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+        if (-not $script:RawConverterReady) { Initialize-RawConverter }
+    }
     $clock  = [Diagnostics.Stopwatch]::StartNew()
     $fs = [IO.File]::OpenRead($Source)
     if ($Offset -gt 0) { [void]$fs.Seek($Offset, [IO.SeekOrigin]::Begin) }
@@ -3294,39 +3878,47 @@ function Convert-EcsRange {
         while ($read -lt $Take -and $null -ne ($line = $reader.ReadLine())) {
             $read++
             if (-not $line.Trim()) { continue }
-            try {
+            if ($Raw) {
+                # Lines between records ("{", "}", "}{") are not records.
                 try {
-                    $doc = $line | ConvertFrom-Json
-                } catch {
-                    # PowerShell 5.1's ConvertFrom-Json cannot create a property
-                    # with an empty name, so it rejects the whole line. Hayabusa's
-                    # "Reg Key Value Set (Sysmon Alert)" rule emits Details with a
-                    # "" key holding the registry value data -- a persistence IOC
-                    # we must not drop. Rename the key in key position only (after
-                    # { or ,) and re-parse. Python's json accepts these lines as-is,
-                    # which is why the two GUIs disagreed on the document count.
-                    $patched = [regex]::Replace($line, '(?<=[{,]\s*)""(?=\s*:)', '"(unnamed)"')
-                    $doc = $patched | ConvertFrom-Json
-                    $recovered++
-                }
-                $ecs = ConvertTo-EcsDocument $doc $ImportId $Aliases
-                if ($Footprints.Count -and (Test-CollectionNoise $doc $Footprints)) {
-                    $ecs.tags = @(@($ecs.tags) | Where-Object { $_ }) + $script:CollectionTag
-                    $tagged++
-                }
-                $writer.WriteLine(($ecs | ConvertTo-Json -Depth 12 -Compress))
-                $n++
-            } catch { $bad++ }
+                    $doc = [EvtxerRawConverter]::ConvertLine($line, $ImportId, $script:RawIngested, "$script:ToolVersion")
+                    if ($null -ne $doc) { $writer.WriteLine($doc); $n++ }
+                } catch { $bad++ }
+            } else {
+                try {
+                    try {
+                        $doc = $line | ConvertFrom-Json
+                    } catch {
+                        # PowerShell 5.1's ConvertFrom-Json cannot create a property
+                        # with an empty name, so it rejects the whole line. Hayabusa's
+                        # "Reg Key Value Set (Sysmon Alert)" rule emits Details with a
+                        # "" key holding the registry value data -- a persistence IOC
+                        # we must not drop. Rename the key in key position only (after
+                        # { or ,) and re-parse. Python's json accepts these lines as-is,
+                        # which is why the two GUIs disagreed on the document count.
+                        $patched = [regex]::Replace($line, '(?<=[{,]\s*)""(?=\s*:)', '"(unnamed)"')
+                        $doc = $patched | ConvertFrom-Json
+                        $recovered++
+                    }
+                    $ecs = ConvertTo-EcsDocument $doc $ImportId $Aliases
+                    if ($Footprints.Count -and (Test-CollectionNoise $doc $Footprints)) {
+                        $ecs.tags = @(@($ecs.tags) | Where-Object { $_ }) + $script:CollectionTag
+                        $tagged++
+                    }
+                    $writer.WriteLine(($ecs | ConvertTo-Json -Depth 12 -Compress))
+                    $n++
+                } catch { $bad++ }
+            }
             if ($OnTick -and $clock.ElapsedMilliseconds -ge 100) {
                 $clock.Restart()
                 if (@(& $OnTick $n) -contains $true) { $cancelled = $true; break }
             }
         }
-    } finally { $reader.Close(); $writer.Close() }
+    } finally { $reader.Close(); $writer.Close(); $script:RawIngested = $null }
     [pscustomobject]@{ Converted = $n; Bad = $bad; Recovered = $recovered; Tagged = $tagged; Cancelled = $cancelled }
 }
 
-function Get-JsonlLineIndex([string]$Path, [int]$Every = 1000) {
+function Get-JsonlLineIndex([string]$Path, [int]$Every = 1000, [scriptblock]$OnChunk) {
     # One pass over the bytes: how many lines (as ReadLine counts them - a last
     # line without a newline counts), and where every Every-th line starts.
     # Marks[k] is the byte offset of line k*Every, so a worker can seek close
@@ -3339,6 +3931,8 @@ function Get-JsonlLineIndex([string]$Path, [int]$Every = 1000) {
     $fs = [IO.File]::OpenRead($Path)
     try {
         while (($n = $fs.Read($buf, 0, $buf.Length)) -gt 0) {
+            # A raw export runs to GBs: the caller keeps its window alive.
+            if ($OnChunk) { & $OnChunk }
             $i = [Array]::IndexOf($buf, [byte]10, 0, $n)
             while ($i -ge 0) {
                 $lines++
@@ -3352,7 +3946,7 @@ function Get-JsonlLineIndex([string]$Path, [int]$Every = 1000) {
     [pscustomobject]@{ Lines = $lines; Every = $Every; Marks = $marks }
 }
 
-function Get-EcsWorkerCount([long]$Lines, [int]$Cores = [Environment]::ProcessorCount) {
+function Get-EcsWorkerCount([long]$Lines, [int]$Cores = [Environment]::ProcessorCount, [long]$PerWorker = $script:EcsLinesPerWorker) {
     # Every core but one: the conversion is CPU-bound PowerShell, and on one
     # thread a 550k-detection batch kept a single core busy - 10-20% of the VM -
     # for most of an hour. The spare core keeps the window and a running
@@ -3360,10 +3954,13 @@ function Get-EcsWorkerCount([long]$Lines, [int]$Cores = [Environment]::Processor
     # Capped at 16 - separate processes still scaled there when measured (10x
     # one), and each is about 100 MB. Small files stay on one: starting a
     # worker and loading this library into it costs a second or two.
-    $byLines = [Math]::Ceiling($Lines / $script:EcsLinesPerWorker)
+    $byLines = [Math]::Ceiling($Lines / $PerWorker)
     return [int][Math]::Max(1, [Math]::Min([Math]::Min($Cores - 1, $script:EcsMaxWorkers), $byLines))
 }
 $script:EcsLinesPerWorker = 5000
+# Raw events convert compiled, ~20,000 records/s on one worker (three lines
+# of the export each) - a worker costs more to start than 5,000 lines take.
+$script:RawLinesPerWorker = 300000
 $script:EcsMaxWorkers     = 16
 $script:HayabusaLibPath   = $PSCommandPath
 
@@ -3379,17 +3976,19 @@ function Start-EcsWorker {
     # <part>.err (why it failed). It rebuilds the footprints and the Details
     # name map itself rather than receiving them - both take well under a second.
     param([string]$Source, [string]$PartPath, [string]$ImportId, [string[]]$EvtxDir, [string]$HayabusaDir,
-          [long]$Offset, [long]$Skip, [long]$Take)
+          [long]$Offset, [long]$Skip, [long]$Take, [switch]$Raw)
     $lit = { param($v) ConvertTo-PsLiteral ([string]$v) }
     $script = @(
         "try {"
         "    . $(& $lit $script:HayabusaLibPath)"
         # The version stamp (agent.version): only the launcher defines it.
         "    `$script:ToolVersion = $(& $lit $script:ToolVersion)"
-        "    `$fp = @(Get-CollectionFootprints @($((@($EvtxDir) | ForEach-Object { & $lit $_ }) -join ', ')))"
-        "    `$al = Get-DetailsAliasMap $(& $lit $HayabusaDir)"
+        # Neither is used for raw events.
+        $(if ($Raw) { "    `$fp = @(); `$al = @{}" } else {
+            "    `$fp = @(Get-CollectionFootprints @($((@($EvtxDir) | ForEach-Object { & $lit $_ }) -join ', ')))`n" +
+            "    `$al = Get-DetailsAliasMap $(& $lit $HayabusaDir)" })
         "    `$r = Convert-EcsRange -Source $(& $lit $Source) -Destination $(& $lit $PartPath) -ImportId $(& $lit $ImportId) ``"
-        "            -Footprints `$fp -Aliases `$al -Offset $Offset -Skip $Skip -Take $Take -OnTick {"
+        "            -Footprints `$fp -Aliases `$al -Offset $Offset -Skip $Skip -Take $Take$(if ($Raw) { ' -Raw' }) -OnTick {"
         "        param(`$n) try { [IO.File]::WriteAllText($(& $lit "$PartPath.n"), [string]`$n) } catch { }"
         "    }"
         "    `$r | ConvertTo-Json -Compress | Set-Content -LiteralPath $(& $lit "$PartPath.done") -Encoding ASCII"
@@ -3428,15 +4027,20 @@ function Convert-HayabusaJsonlToEcs {
         [int]$Workers = 0,
         # Whose rules/ and rules\config\default_details.txt name the Details
         # fields - see Get-DetailsAliasMap. The tool's own copy by default.
-        [string]$HayabusaDir = (Join-Path (Split-Path -Parent $script:HayabusaLibPath) 'hayabusa-x64')
+        [string]$HayabusaDir = (Join-Path (Split-Path -Parent $script:HayabusaLibPath) 'hayabusa-x64'),
+        # Source is Hayabusa's search export (Get-HayabusaRawExportArgs):
+        # every event becomes a raw-event document, not a detection.
+        [switch]$Raw
     )
-    $footprints = @(Get-CollectionFootprints $EvtxDir)
+    $footprints = if ($Raw) { @() } else { @(Get-CollectionFootprints $EvtxDir) }
     if (-not $ImportId) {
         $ImportId = (Get-Date -Format 'yyyyMMddHHmmss') + [guid]::NewGuid().ToString('N').Substring(0, 8)
     }
-    $index = Get-JsonlLineIndex $Source
+    # The tab's progress callback pumps the window: called (0, 0) while the
+    # lines are counted, which on a multi-GB raw export takes a while.
+    $index = Get-JsonlLineIndex $Source -OnChunk $(if ($OnProgress) { { [void](& $OnProgress 0 0) } })
     $total = $index.Lines
-    if ($Workers -le 0) { $Workers = Get-EcsWorkerCount $total }
+    if ($Workers -le 0) { $Workers = Get-EcsWorkerCount $total -PerWorker $(if ($Raw) { $script:RawLinesPerWorker } else { $script:EcsLinesPerWorker }) }
     $Workers = [int][Math]::Max(1, [Math]::Min($Workers, [Math]::Max(1, $total)))
 
     $cancelled = $false
@@ -3444,7 +4048,7 @@ function Convert-HayabusaJsonlToEcs {
         $tick = if ($OnProgress) { { param($n) & $OnProgress $n $total } }
         # Built here, not before the branch: the workers build their own.
         $parts = @(Convert-EcsRange -Source $Source -Destination $Destination -ImportId $ImportId `
-                       -Footprints $footprints -Aliases (Get-DetailsAliasMap $HayabusaDir) -OnTick $tick)
+                       -Footprints $footprints -Aliases $(if (-not $Raw) { Get-DetailsAliasMap $HayabusaDir }) -OnTick $tick -Raw:$Raw)
     } else {
         # Each worker converts one contiguous slice into its own part file, and
         # the parts are joined in order - the same file, line for line, as a
@@ -3465,7 +4069,7 @@ function Convert-HayabusaJsonlToEcs {
                     Done    = [long]0
                     Process = (Start-EcsWorker -Source $Source -PartPath $partPath -ImportId $ImportId `
                                    -EvtxDir $EvtxDir -HayabusaDir $HayabusaDir -Offset $index.Marks[$mark] `
-                                   -Skip ($first - $mark * $index.Every) -Take $slice)
+                                   -Skip ($first - $mark * $index.Every) -Take $slice -Raw:$Raw)
                 }
             }
             while (@($jobs | Where-Object { -not $_.Process.HasExited }).Count) {
@@ -3520,212 +4124,6 @@ function Convert-HayabusaJsonlToEcs {
         Source = $Source; Destination = $Destination; ImportId = $ImportId
         Total = $total; Converted = (& $sum 'Converted'); Bad = (& $sum 'Bad'); Recovered = (& $sum 'Recovered')
         Cancelled = $cancelled; Tagged = (& $sum 'Tagged'); Footprints = $footprints.Count; Workers = $Workers
-    }
-}
-
-# ----------------------------------------------------- raw events (SO) ---
-# The Raw Events tab sends the collected EVTX themselves to a Security Onion
-# manager and runs its own importer there, so EVERY event becomes searchable,
-# not only the ones a Hayabusa rule matched. so-import-evtx (read from the
-# Security Onion 2.4 source, not guessed):
-#   - must run on a manager-type node (standalone, eval, import, manager);
-#   - names each import after the MD5 of the FILE, and skips a file it has
-#     imported before - so sending the same logs twice adds nothing;
-#   - prints a link whose time range runs from the oldest to the newest
-#     event - BUT, MEASURED on a real 2.4.211 Import node, files every event
-#     under the time of the IMPORT: its agent input decodes the converted
-#     JSON without overwrite_keys, so @timestamp stays the read time and the
-#     event's own time lands in event.created. Its link therefore opens on an
-#     empty window; Get-SoWideLink stretches it to cover both;
-#   - writes into Security Onion's own logs-import-so data stream, not ours.
-# Transport is PuTTY's plink/pscp (code\putty): they take a password and a
-# pinned host key without a prompt, which Windows' own ssh/scp cannot.
-
-function Find-PuttyTool([ValidateSet('plink', 'pscp')][string]$Name) {
-    # Shipped in code\putty beside this library. '' when missing.
-    $p = Join-Path (Split-Path -Parent $script:HayabusaLibPath) "putty\$Name.exe"
-    if (Test-Path -LiteralPath $p) { return $p }
-    return ''
-}
-
-function Get-SshHostKeyFingerprint([string]$Text) {
-    # The SHA-256 host key fingerprint in plink's output. With -batch and no
-    # -hostkey, an unknown server makes plink stop and print it - which is
-    # how the Fetch button reads it without trusting anything.
-    $m = [regex]::Match("$Text", 'SHA256:[A-Za-z0-9+/]{43}=?')
-    if ($m.Success) { return $m.Value }
-    return ''
-}
-
-function New-PasswordFile([string]$Password) {
-    # plink/pscp -pwfile: the password in a file only this Windows account
-    # can read, instead of on a command line every process can see. The
-    # caller deletes it in a finally.
-    # A process killed mid-step (Task Manager, power loss) never reaches the
-    # caller's finally, so an earlier file can be left behind (found when a
-    # test harness was cut short). Each file is named after the EVTXER that
-    # made it, and is swept only once that process is gone: sweeping by age
-    # deleted a raw import's file in use - 15 minutes in, at copy 570 of 598,
-    # when a second SSH step started (v50, found driving the job queue).
-    foreach ($old in Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Filter 'evtxer-pw-*.txt' -File -ErrorAction SilentlyContinue) {
-        $owner = [regex]::Match($old.Name, '^evtxer-pw-(\d+)-')
-        $gone = if ($owner.Success) { -not (Get-Process -Id ([int]$owner.Groups[1].Value) -ErrorAction SilentlyContinue) }
-                else { $old.LastWriteTime -lt (Get-Date).AddHours(-1) }   # named before v50: no owner in it
-        if ($gone) { Remove-Item -LiteralPath $old.FullName -Force -ErrorAction SilentlyContinue }
-    }
-    $f = Join-Path ([IO.Path]::GetTempPath()) ("evtxer-pw-{0}-{1}.txt" -f $PID, [guid]::NewGuid().ToString('N'))
-    [IO.File]::WriteAllText($f, $Password, (New-Object Text.UTF8Encoding($false)))
-    try {
-        $acl = New-Object Security.AccessControl.FileSecurity
-        $acl.SetAccessRuleProtection($true, $false)
-        $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
-        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($me, 'FullControl', 'Allow')))
-        Set-Acl -LiteralPath $f -AclObject $acl
-    } catch { }
-    return $f
-}
-
-function Get-PlinkArgs {
-    # Every plink call the tab makes: -batch (never wait for a prompt), the
-    # pinned host key, the password from a file. An empty -HostKey is the
-    # Fetch probe: plink then refuses the unknown server and names its key.
-    param([string]$HostName, [int]$Port = 22, [string]$User, [string]$HostKey,
-          [string]$PasswordFile, [string]$Command)
-    # The host is positional: one starting with '-' would be read as an
-    # option (-proxycmd runs a local command).
-    if (-not (Test-TargetName $HostName)) { throw "not a host name or address: '$HostName'" }
-    $a = @('-ssh', '-batch', '-P', "$Port")
-    if ($User)         { $a += @('-l', $User) }
-    if ($HostKey)      { $a += @('-hostkey', $HostKey) }
-    if ($PasswordFile) { $a += @('-pwfile', $PasswordFile) }
-    $a += $HostName
-    if ($Command)      { $a += $Command }
-    return ,$a
-}
-
-function Get-PscpArgs {
-    # One file to one remote path. -scp: Security Onion's sshd may run without
-    # the SFTP subsystem, and plain scp needs nothing on the far side.
-    param([string]$HostName, [int]$Port = 22, [string]$User, [string]$HostKey,
-          [string]$PasswordFile, [string]$LocalFile, [string]$RemotePath)
-    if (-not (Test-TargetName $HostName)) { throw "not a host name or address: '$HostName'" }
-    return ,@('-batch', '-scp', '-P', "$Port", '-l', $User, '-hostkey', $HostKey, '-pwfile', $PasswordFile,
-              $LocalFile, ("{0}:{1}" -f $HostName, $RemotePath))
-}
-
-function New-SoImportStagingDir([datetime]$Now = (Get-Date)) {
-    # The manager's temporary folder for one import. Only [a-z0-9-], so it is
-    # safe unquoted in a remote shell command.
-    return '/tmp/evtxer-import-{0}-{1}' -f $Now.ToString('yyyyMMddHHmmss'), [guid]::NewGuid().ToString('N').Substring(0, 8)
-}
-
-function Get-SoImportRemoteName([int]$Index, [string]$Path) {
-    # Every host folder has its own Security.evtx, so the files are renamed
-    # on the way: a number, the host folder, the file - and only characters a
-    # remote shell takes as they are. so-import-evtx names imports by content,
-    # not by file name, so the name changes nothing about the import.
-    $folder = Split-Path -Leaf (Split-Path -Parent $Path)
-    $name = '{0:000}_{1}__{2}' -f $Index, $folder, (Split-Path -Leaf $Path)
-    return ($name -replace '[^A-Za-z0-9._-]', '_')
-}
-
-function Get-SoImportFiles([string]$Folder) {
-    # The .evtx files to send: the whole tree (one subfolder per collected
-    # host), never a transfer still landing as .partial.
-    if (-not $Folder -or -not (Test-Path -LiteralPath $Folder)) { return @() }
-    return @(Get-ChildItem -LiteralPath $Folder -Recurse -File -Filter '*.evtx' -ErrorAction SilentlyContinue |
-             Sort-Object FullName)
-}
-
-function Get-SoRemoteCommand {
-    # The shell commands run on the manager. sudo -S -p '' reads the password
-    # from standard input (written there by the process pump) and prints no
-    # prompt; the staging folder is New-SoImportStagingDir's, safe unquoted.
-    param([ValidateSet('Test', 'Stage', 'Import', 'Clean')][string]$Step, [string]$RemoteDir)
-    switch ($Step) {
-        'Test'   { return "echo EVTXER-SSH-OK; sudo -S -p '' true && echo EVTXER-SUDO-OK; " +
-                          "command -v so-import-evtx >/dev/null 2>&1 || test -x /usr/sbin/so-import-evtx && echo EVTXER-IMPORTER-OK" }
-        # The free space rides on this call (ConvertFrom-DfOutput); '; true'
-        # because df fails where /nsm does not exist - EVTXER-STAGED still
-        # says whether the folder was made.
-        'Stage'  { return "mkdir -p $RemoteDir && chmod 700 $RemoteDir && echo EVTXER-STAGED; df -Pk /tmp /nsm 2>/dev/null; true" }
-        'Import' { return "sudo -S -p '' so-import-evtx $RemoteDir/*.evtx" }
-        'Clean'  { return "rm -rf $RemoteDir && echo EVTXER-CLEANED" }
-    }
-}
-
-function ConvertFrom-DfOutput([string[]]$Lines) {
-    # 'df -Pk': "Filesystem 1024-blocks Used Available Capacity Mounted on",
-    # one row per path asked, in that order. Anything else is skipped.
-    @(foreach ($l in $Lines) {
-        if ("$l" -match '^\S+\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)%\s+(/\S*)\s*$') {
-            [pscustomobject]@{ Mount = $Matches[5]; SizeKB = [long]$Matches[1]; AvailKB = [long]$Matches[3]; UsedPct = [int]$Matches[4] }
-        }
-    })
-}
-
-function Get-SoDiskWarning([object[]]$Disks, [long]$SendBytes) {
-    # A warning, never a stop (owner, 2026-10-26: "more of a warning than
-    # anything", and not polled). $Disks = ConvertFrom-DfOutput of
-    # 'df -Pk /tmp /nsm': [0] where the files are staged, [1] /nsm, where
-    # so-import-evtx keeps its copy and Elasticsearch indexes every event -
-    # about 3x the EVTX, a rough rule. Elasticsearch stops placing data at
-    # 90% full and refuses writes at 95%, so this speaks up past 85%.
-    $gb = { param($b) '{0:N1} GB' -f ($b / 1GB) }
-    @(
-        if (@($Disks).Count -ge 1 -and $Disks[0].AvailKB * 1KB -lt $SendBytes * 1.1) {
-            "The manager's /tmp has $(& $gb ($Disks[0].AvailKB * 1KB)) free and this import stages $(& $gb $SendBytes) there - the copy may fail."
-        }
-        if (@($Disks).Count -ge 2 -and $Disks[1].SizeKB -gt 0) {
-            $n = $Disks[1]; $need = $SendBytes * 3
-            if ((($n.SizeKB - $n.AvailKB) * 1KB + $need) / ($n.SizeKB * 1KB) -gt 0.85) {
-                "/nsm on the manager has $(& $gb ($n.AvailKB * 1KB)) free ($($n.UsedPct)% used) and this import may need about $(& $gb $need) there (a copy of the files plus the indexed events). Elasticsearch refuses new data at 95% full - free space there, or import fewer hosts."
-            }
-        }
-    )
-}
-
-function Get-SoTestVerdict([string[]]$Lines) {
-    # What the Test button learned, from the markers Get-SoRemoteCommand
-    # 'Test' prints.
-    $t = $Lines -join "`n"
-    [pscustomobject]@{
-        Ssh      = $t -match 'EVTXER-SSH-OK'
-        Sudo     = $t -match 'EVTXER-SUDO-OK'
-        Importer = $t -match 'EVTXER-IMPORTER-OK'
-    }
-}
-
-function Get-SoWideLink([string]$Url, [datetime]$NowUtc = [datetime]::UtcNow) {
-    # so-import-evtx's link with its time range (&t=<from> - <to>) stretched
-    # to end tomorrow: from the oldest EVENT (where a fixed Security Onion
-    # would file them) to now (where 2.4.211 does). Unchanged if the link has
-    # no range in the expected form.
-    $day = '{0}%2000%3A00%3A00%20AM'
-    $m = [regex]::Match($Url, '&t=(\d{4}%2F\d{2}%2F\d{2})%2000%3A00%3A00%20AM%20-%20\d{4}%2F\d{2}%2F\d{2}%2000%3A00%3A00%20AM')
-    if (-not $m.Success) { return $Url }
-    # Built by hand: in a .NET date format the F of %2F is itself a code
-    # (fractions of a second), escaped % or not.
-    $t = $NowUtc.Date.AddDays(1)
-    $to = ($day -f ('{0:yyyy}%2F{0:MM}%2F{0:dd}' -f $t))
-    return $Url.Substring(0, $m.Index) + '&t=' + ($day -f $m.Groups[1].Value) + '%20-%20' + $to + $Url.Substring($m.Index + $m.Length)
-}
-
-function Get-SoImportResult([string[]]$Lines) {
-    # so-import-evtx's own report, read from its printed lines (2.4 wording):
-    # "- importing logs to Elasticsearch..." per new file, "- this EVTX has
-    # already been imported; skipping", "- WARNING: This evtx file may not
-    # have fully imported successfully", "Import complete!", the
-    # "From: ... To: ..." line and the https://.../#/dashboards link.
-    $imported = @($Lines | Where-Object { $_ -match 'importing logs to Elasticsearch' }).Count
-    $skipped  = @($Lines | Where-Object { $_ -match 'already been imported' }).Count
-    $warned   = @($Lines | Where-Object { $_ -match 'may not have fully imported' }).Count
-    $url  = @($Lines | Where-Object { $_ -match '^\s*https://\S+/#/dashboards' } | ForEach-Object { $_.Trim() }) | Select-Object -Last 1
-    $span = @($Lines | Where-Object { $_ -match '^\s*From:\s*\S+\s+To:\s*\S+' } | ForEach-Object { $_.Trim() }) | Select-Object -Last 1
-    [pscustomobject]@{
-        Complete = [bool](@($Lines | Where-Object { $_ -match 'Import complete!' }).Count)
-        Imported = $imported; Skipped = $skipped; Warnings = $warned
-        Url = "$url"; WideUrl = $(if ($url) { Get-SoWideLink "$url" } else { '' }); TimeRange = "$span"
     }
 }
 
@@ -4211,7 +4609,9 @@ function ConvertTo-NetworkLogRow($r) {
                                   else { "WinRM session to ${t}: wevtutil epl the selected logs, pull them back (one zip when small enough, else file by file), delete the copies ($($r.Protocol) $p$as)" } }
             'Verify connection' { "GET https://${t}:$p/ and /_cluster/health (Elasticsearch$as)" }
             'Upload'            { "PUT https://${t}:$p/_index_template/hayabusa-evtx, then POST /_bulk (create) into index $($r.Output) (Elasticsearch$as)" }
+            'Raw upload'        { "PUT https://${t}:$p/_index_template/hayabusa-raw, then POST /_bulk (create) into index $($r.Output) (Elasticsearch$as)" }
             'Delete index'      { "DELETE https://${t}:$p/$($r.Output) (Elasticsearch$as)" }
+            # Rows written before v81, when raw events went over SSH.
             'SO host key read'  { "plink ${t}:$p - read the SSH host key only" }
             'Certificate fetch' { "TLS handshake to ${t}:$p - read the certificate's SHA-256 fingerprint only ($($r.Protocol))" }
             'SO import test'    { "plink ${t}:$p - log in, sudo, look for so-import-evtx$as" }
@@ -4664,25 +5064,51 @@ function Get-ReadinessPills {
     # The pills before the PCAP one: is each part of the
     # mission set up? Green when it is, grey when not; the tip says what to
     # do. The same facts the queue waits on.
-    param([string]$MissionName, [string]$MissionIndex, [bool]$ElkOk, [string]$ElkHost, [bool]$SoReady, [string]$SoHost)
+    param([string]$MissionName, [string]$MissionIndex, [bool]$ElkOk, [string]$ElkHost)
     $pill = { param($Key, $On, $Text, $Tip) [pscustomobject]@{ Key = $Key; On = [bool]$On; Text = $Text; Tip = $Tip } }
     @(
         if ($MissionIndex) { & $pill Mission $true "Mission: $MissionName" "Uploads go into $MissionIndex." }
         else { & $pill Mission $false 'No mission' 'Name the mission on the Settings tab - uploads wait for it.' }
         if ($ElkOk) { & $pill Elk $true 'ELK connected' "Verified: $ElkHost. Uploads can run." }
         else { & $pill Elk $false 'ELK not verified' 'Press VERIFY CONNECTIVITY on the Upload tab - uploads wait for it.' }
-        if ($SoReady) { & $pill So $true 'SO ready' "$SoHost, filled in on the Raw Events tab. The login itself is checked when an import runs." }
-        else { & $pill So $false 'SO not set' 'Fill in the Raw Events tab - host, user, password, host key. Only needed for raw imports.' }
     )
 }
 
 function Get-WhereToLook([ValidateSet('detections', 'raw')][string]$Kind) {
-    # Said after an upload or a raw import (which data
+    # Said after an upload (which data
     # shows in Security Onion and which only in Kibana was not obvious).
     if ($Kind -eq 'detections') {
         return "Where to look: Kibana - Discover, or the Hayabusa dashboards (Dashboards tab). Detections are in their own index, so not in Security Onion's Hunt or Alerts."
     }
-    return "Where to look: Security Onion's Hunt and Dashboards, and Kibana's Raw Events dashboards."
+    return "Where to look: Kibana - Discover with the data view 'Raw Windows events (EVTXER)' (hayabusa-raw-*), or the Raw Events dashboards. @timestamp is when each event happened. Not in Security Onion's Hunt or Alerts."
+}
+
+$script:DataViewNames = [ordered]@{
+    Detections = "Hayabusa EVTX detections (hayabusa-*,-hayabusa-raw-*)"
+    Raw        = "Raw Windows events (EVTXER) (hayabusa-raw-*)"
+    Everything = "Mission - everything (hayabusa-*)"
+}
+
+function Get-KibanaFindLines {
+    # What to paste where once an upload is done (owner, 2026-10-29: the
+    # queries at the bottom, ready to copy) - every value filled in. Label is
+    # what it is for, Text what to paste. Hosts: the names the index holds for
+    # this upload (Show-UploadHostLinks), at most $MaxHosts machines.
+    param([string]$MissionIndex, [string]$RawIndex, [string]$ImportId, [string[]]$Hosts, [int]$MaxHosts = 5)
+    $line = { param($label, $text) [pscustomobject]@{ Label = $label; Text = $text } }
+    $sets = @(Get-HostLinkSet $Hosts)
+    $counts = @(foreach ($i in @($MissionIndex, $RawIndex) | Where-Object { $_ }) { "GET $i/_count" })
+    return @(
+        & $line 'Kibana data views (Discover, top left)' (@($script:DataViewNames.Values) -join '  |  ')
+        if ($ImportId) { & $line 'KQL - everything this upload sent (detections and raw events)' "import.id:`"$ImportId`"" }
+        foreach ($s in @($sets | Select-Object -First $MaxHosts)) {
+            & $line "KQL - $($s.Key), every collection of it (time picker: as far back as needed)" (Get-HostLinkQuery $s.Names 'host.name')
+        }
+        if ($sets.Count -gt $MaxHosts) { & $line 'More hosts' "$($sets.Count - $MaxHosts) more - see the host links above" }
+        & $line 'KQL - raw events only, or detections only (data view: Mission - everything)' 'event.kind:"event"   /   event.kind:"alert"'
+        & $line 'Around a detection' "Discover, data view 'Mission - everything': open the detection, then 'View surrounding documents' - the raw events of the same moment, by @timestamp."
+        if ($counts) { & $line 'Dev Tools (Kibana > Management > Dev Tools) - how many are in the index' ($counts -join "`n") }
+    )
 }
 
 # ------------------------------------------------------------------ guide ---
@@ -4725,41 +5151,100 @@ function Find-ReadmeChapters([object[]]$Chapters, [string]$Query) {
             if (-not $m) { $n = 0; break }
             $n += $m
         }
-        if ($n) { [pscustomobject]@{ Title = $c.Title; Count = $n; Label = "$($c.Title)   -   $n match$(if ($n -ne 1) { 'es' })" } }
+        if ($n) {
+            [pscustomobject]@{ Title = $c.Title; Count = $n; Label = "$($c.Title)   -   $n match$(if ($n -ne 1) { 'es' })"
+                               Snippets = @(Get-ReadmeSnippets $c $Query) }
+        }
     })
     return @($hits | Sort-Object @{ Expression = 'Count'; Descending = $true }, Title)
+}
+
+function Get-ReadmeSnippets($Chapter, [string]$Query, [int]$Max = 3) {
+    # The lines of a chapter that hold the words searched for, the ones with
+    # the most of them first (owner, 2026-10-29: a chapter name alone did not
+    # say where the answer was). Each opens the README at that very line.
+    $words = @(Get-SearchWords $Query)
+    if (-not $words.Count) { return @() }
+    $i = 0
+    $scored = @(foreach ($l in ($Chapter.Body -split "\r?\n")) {
+        $i++
+        $t = $l.Trim()
+        if (-not $t -or $t -match '^-{4,}$' -or $t -eq $Chapter.Title) { continue }
+        $low = $t.ToLowerInvariant()
+        $n = @($words | Where-Object { $low.Contains($_) }).Count
+        if ($n) {
+            [pscustomobject]@{ Title = $Chapter.Title; Line = $t; At = $i; Score = $n
+                               Shown = $(if ($t.Length -gt 150) { $t.Substring(0, 147) + '...' } else { $t }) }
+        }
+    })
+    return @($scored | Sort-Object @{ Expression = 'Score'; Descending = $true }, At | Select-Object -First $Max)
+}
+
+function Get-ReadmeLinkKeys([object[]]$Chapters) {
+    # What counts as a mention of a chapter in the README's own text: its
+    # title, and the part before " (" or ":" when the text names it short
+    # ("see MISSION" for MISSION (SETTINGS TAB)). Upper case only, as the
+    # README writes them; six letters at least, so ELK or PCAP alone is no link.
+    $keys = @{}
+    foreach ($c in $Chapters) {
+        $t = "$($c.Title)".Trim()
+        foreach ($k in @($t, ($t -split ' \(')[0], ($t -split ':')[0])) {
+            $k = $k.Trim()
+            if ($k.Length -ge 6 -and $k -cmatch '[A-Z]' -and $k -cnotmatch '[a-z]' -and -not $keys.ContainsKey($k)) { $keys[$k] = $t }
+        }
+    }
+    return $keys
+}
+
+function Split-ReadmeLine([string]$Line, [hashtable]$Keys, [string]$Self = '') {
+    # A README line as pieces: plain text, and mentions of other chapters
+    # (Link = that chapter's title) - the reading window makes those links.
+    # The longest title first, so "THE QUEUE (AUTOMATIC PROCESSING)" is not
+    # cut at "THE QUEUE"; a chapter never links to itself.
+    if (-not $Keys -or -not $Keys.Count -or -not $Line) { return @([pscustomobject]@{ Text = $Line; Link = '' }) }
+    $alt = (@($Keys.Keys | Sort-Object Length -Descending) | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    $rx = New-Object regex ("(?<![A-Z0-9])(?:$alt)(?![A-Za-z0-9])")
+    $out = @(); $pos = 0
+    foreach ($m in $rx.Matches($Line)) {
+        $title = $Keys[$m.Value]
+        if ($title -eq $Self) { continue }
+        if ($m.Index -gt $pos) { $out += [pscustomobject]@{ Text = $Line.Substring($pos, $m.Index - $pos); Link = '' } }
+        $out += [pscustomobject]@{ Text = $m.Value; Link = $title }
+        $pos = $m.Index + $m.Length
+    }
+    if ($pos -lt $Line.Length) { $out += [pscustomobject]@{ Text = $Line.Substring($pos); Link = '' } }
+    return @($out)
 }
 
 function Get-GuideEntries {
     $e = { param($Group, $Chapter, $Title, $Answer) [pscustomobject]@{ Group = $Group; Chapter = $Chapter; Title = $Title; Answer = $Answer; More = "More: $Chapter" } }
     $find = 'FINDING THINGS: TIME, PIVOTS, WHERE DATA LANDS'
-    $raw = 'EVERY RAW EVENT, NOT JUST DETECTIONS (SECURITY ONION)'
+    $raw = 'EVERY RAW EVENT, NOT JUST DETECTIONS'
     @(
-        & $e 'Times' $find 'When did a raw event really happen? (Security Onion)' (
-            'Security Onion 2.4 files raw imports under the time of the IMPORT: @timestamp is when you imported. ' +
-            "The event's own time is event.created. In Hunt or Dashboards: set the time range to cover the import, " +
-            'add the event.created column and sort by it. In Kibana: the Raw Events dashboards, or Discover with the ' +
-            'data view "Raw Windows events (Security Onion)" - its time field is event.created.')
+        & $e 'Times' $find 'When did a raw event really happen?' (
+            "@timestamp - when it happened on the machine, in UTC, as for detections. In Kibana: Discover with " +
+            'the data view "Raw Windows events (EVTXER)", the Raw Events dashboards, or Mission timeline.')
         & $e 'Times' $find 'Are the times on Hayabusa detections right?' (
             "Yes. A detection's @timestamp is when the event happened on the machine, in UTC. Kibana shows it in " +
             "your browser's time zone.")
         & $e 'Pivoting' $find 'How do I get from a detection to the full log?' (
-            'Take three fields from the detection: host.name, winlog.channel and winlog.record_id. Search the raw ' +
-            'events (Security Onion Hunt, or Kibana Discover) for:  winlog.computer_name:"WS01" AND ' +
-            'winlog.channel:"Security" AND winlog.record_id:12345   AND in capitals: Security Onion reads a ' +
-            'lower-case "and" as a word to find. Values are case-sensitive - type them as the ' +
-            'detection shows them. The logs must have been raw-imported first.')
+            'Take three fields from the detection: host.name, winlog.channel and winlog.record_id. In Kibana ' +
+            'Discover (data view "Raw Windows events (EVTXER)" or "Mission - everything") search:  ' +
+            'host.name:"WS01" and winlog.channel:"Security" and winlog.record_id:12345   Values are ' +
+            'case-sensitive - type them as the detection shows them. Or, in "Mission - everything", open the ' +
+            "detection and choose 'View surrounding documents'. The raw events must have been sent first.")
         & $e 'Pivoting' $find 'Why does a detection not show the whole event?' (
             'Hayabusa sends only what a rule matched: the matched events, with the fields Hayabusa extracts ' +
-            '(winlog.event_data.*, hayabusa.details). The whole event, and every event no rule matched, is only ' +
-            "in the raw import - Raw Events tab, or the queue's Raw import to SO.")
+            '(winlog.event_data.*, hayabusa.details). Every event no rule matched is in the raw events: the ' +
+            "Convert tab's 'Also export every raw event', or the queue's Raw events.")
         & $e 'Where data lands' $find "Why are my detections not in Security Onion's Hunt or Alerts?" (
             'Detections go into their own index, hayabusa-mission-<mission name>, so they can be dropped cleanly. ' +
             "Hunt and Alerts search only Security Onion's own indices. Look in Kibana: Discover, or the Hayabusa " +
             'dashboards (the Dashboards tab imports them).')
         & $e 'Where data lands' $find 'Where do raw events land?' (
-            "In Security Onion's own logs-import-so data stream: Hunt, Dashboards, and Kibana's Raw Events " +
-            'dashboards. Security Onion only - a plain Elastic stack has no importer, so only detections go there.')
+            'In the mission''s raw index, hayabusa-raw-<mission name>, beside its detections - on Security Onion ' +
+            'and plain Elastic alike, over the Upload tab''s connection. In Kibana: Discover ("Raw Windows events ' +
+            '(EVTXER)" or "Mission - everything"), the Raw Events dashboards, Mission timeline. Not in Hunt.')
         & $e 'Where data lands' 'THINGS WORTH KNOWING' 'Which EVTXER version made a detection?' (
             'agent.version on every detection EVTXER converts (from v72); event.ingested says when it was ' +
             'converted. In Kibana: agent.version : 72')
@@ -4767,31 +5252,30 @@ function Get-GuideEntries {
             'Nothing doubles. Every detection has a fixed id (event.id); one already in the index is counted as ' +
             "'already there' and skipped, so a re-pull adds only new detections. One exception: a rules update " +
             'that renamed a rule brings its old detections back under the new title.')
-        & $e 'Duplicates' $raw 'What if I raw-import the same logs twice?' (
-            'An identical file is skipped - Security Onion knows files by content (MD5). But the same machine ' +
-            'pulled on two days is two different files, and the events they share are imported twice. Queue only ' +
-            'the newest folder of each machine.')
-        & $e 'Disk' $raw "What does 'LOW DISK on the manager' mean?" (
-            'Checked once per raw import: /tmp cannot hold the files, or /nsm would pass 85% full (Security Onion ' +
-            'keeps a copy of the files and indexes every event - about 3x the EVTX). Elasticsearch refuses new ' +
-            'data at 95%. A warning only - the import still runs. On the manager: df -h /tmp /nsm')
+        & $e 'Duplicates' $raw 'What if I send the same raw events twice?' (
+            'Nothing doubles. Every raw event has a fixed id (machine, log, record number, event id, time); one ' +
+            "already in the index is counted as 'already there' and skipped - also when the same machine is " +
+            'pulled again a day later: only its new events are added.')
+        & $e 'Disk' $raw 'How big are the raw events?' (
+            'About 250 bytes per event in Elasticsearch - roughly 25 GB per 100 million events. While converting, ' +
+            'the disk beside the results needs about 1.5x the EVTX; the raw step says so and stops if it has not.')
         & $e 'Queue and archive' 'ARCHIVE (SETTINGS TAB)' 'What does Archive delete?' (
             'For each host folder it zips the EVTX into the archive folder, reads every file back (SHA-256), and ' +
             'only then deletes that host folder from the EVTX drop folder. If the drop folder is your only copy - ' +
             'a share you want to keep - leave Archive unticked.')
         & $e 'Queue and archive' 'THE QUEUE (AUTOMATIC PROCESSING)' 'A queue row is amber - why?' (
-            'Amber means waiting for you, and the row says what for: the mission name, VERIFY CONNECTIVITY, the ' +
-            'Raw Events tab, a password, or the PCAP question. Fix that and the job carries on by itself.')
+            'Amber means waiting for you, and the row says what for: the mission name, VERIFY CONNECTIVITY, ' +
+            'a password, or the PCAP question. Fix that and the job carries on by itself.')
         & $e 'Queue and archive' 'THE QUEUE (AUTOMATIC PROCESSING)' 'How do I run 30+ machines?' (
             'Settings: point the EVTX drop folder at the folder whose subfolders are the machines. Tick the steps ' +
             'under QUEUE, then Add folders... and Select all. It runs one machine at a time, start to finish. For a ' +
-            'second pass (raw import only, say): change the ticks, Clear done, Add folders... again.')
+            'second pass (raw events only, say): change the ticks, Clear done, Add folders... again.')
         & $e 'Passwords and PCAP' 'REMEMBERED PASSWORDS' 'Why did EVTXER forget my password?' (
             'A password is kept only when Remember is ticked, after a check that worked - encrypted for your ' +
             'Windows account on this machine. Otherwise it lasts until EVTXER closes, and after a restart the ' +
             'queue waits in amber for it.')
         & $e 'Passwords and PCAP' 'ACCOUNTABILITY PCAP (SETTINGS TAB)' 'The queue stopped after the PCAP question - why?' (
-            'Closing that question means cancel: uploads and raw imports wait. Press Retry on the row to be ' +
+            'Closing that question means cancel: uploads and raw events wait. Press Retry on the row to be ' +
             'asked again - then START CAPTURE, or Continue without capture.')
         & $e 'Connecting' 'SECURITY ONION: LETTING EVTXER IN' "VERIFY CONNECTIVITY says 'Nothing answered at ...:9200'?" (
             'If the host and port are right, Security Onion''s firewall is not letting this machine in - rare, ' +
@@ -4807,9 +5291,9 @@ function Get-GuideEntries {
             'Every upload of the mission goes into one index, hayabusa-mission-<name>; uploads wait until it is ' +
             "named. 'Delete mission index...' removes just that index - rarely needed when the stack is rebuilt " +
             'after each mission.')
-        & $e 'Mission and pills' 'THE EIGHT TABS' 'What do the pills at the top mean?' (
-            'Mission, ELK, SO: green = set up, grey = not yet (SO is only needed for raw imports). PCAP: red with ' +
-            'a pulsing dot = recording. Click one to open the tab that fixes it.')
+        & $e 'Mission and pills' 'THE SEVEN TABS' 'What do the pills at the top mean?' (
+            'Mission, ELK: green = set up, grey = not yet (ELK covers detections and raw events - one ' +
+            'connection). PCAP: red with a pulsing dot = recording. Click one to open the tab that fixes it.')
     )
 }
 
@@ -4884,6 +5368,42 @@ function Remove-RememberedSecret([string]$Kind, [string]$HostName, [string]$User
     Remove-Item -LiteralPath (Get-SecretPath $Kind $HostName $User $Folder) -Force -ErrorAction SilentlyContinue
 }
 
+function Remove-RetiredRawImportState([string]$AppRoot, [string]$Folder = $script:SecretFolder) {
+    # v81 removed the Raw Events tab (raw events over SSH to Security Onion's
+    # importer; they go to hayabusa-raw-<mission> over 9200 now). What it
+    # left behind: code\soimport.conf (host, port, user, host key) and, if
+    # Remember was ticked, that account's SSH password (DPAPI, filed under
+    # the host and user the .conf names) - a stored password for a removed
+    # feature is only a liability. Returns what was removed, for the log.
+    # Every SSH password this Windows account remembered goes, whichever
+    # manager or account it was for and whether or not the .conf is still
+    # there (another user of this install may have removed it already): a
+    # file is one when it decrypts with the 'ssh' purpose Save-RememberedSecret
+    # gave it. Files of other purposes do not decrypt with it and stay.
+    $gone = @()
+    $conf = Join-Path $AppRoot 'soimport.conf'
+    $named = ''
+    if (Test-Path -LiteralPath $conf) {
+        try { $c = Get-Content -LiteralPath $conf -Raw | ConvertFrom-Json; if ($c.host -and $c.user) { $named = "$($c.user)@$($c.host)" } } catch { }
+        Remove-Item -LiteralPath $conf -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $conf)) { $gone += "code\soimport.conf (the Raw Events tab's settings)" }
+    }
+    $n = 0
+    if (Test-Path -LiteralPath $Folder) {
+        Add-Type -AssemblyName System.Security
+        foreach ($f in Get-ChildItem -LiteralPath $Folder -Filter '*.dpapi' -File -ErrorAction SilentlyContinue) {
+            try {
+                [void][Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String([IO.File]::ReadAllText($f.FullName).Trim()),
+                          [Text.Encoding]::UTF8.GetBytes('EVTXER|ssh'), [Security.Cryptography.DataProtectionScope]::CurrentUser)
+            } catch { continue }
+            Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue
+            $n++
+        }
+    }
+    if ($n) { $gone += "$n remembered SSH password(s)$(if ($named) { " (the last for $named)" })" }
+    return $gone
+}
+
 # ------------------------------------------------------- one at a time ---
 # One operator at a time per install. A second
 # EVTXER on the same install - even from another RDP session - is refused and
@@ -4931,20 +5451,23 @@ function Invoke-PumpedTool {
     # Invoke-ExternalTool's twin for code that runs OFF the window's thread
     # (the job queue): the same compiled pump, but the lines go to -LogWriter
     # and Cancel comes from the shared -Progress table. -1 when cancelled.
-    # The parameters match Invoke-ExternalTool's, so Invoke-SoImport can hand
-    # the same hashtable to either one.
+    # The parameters match Invoke-ExternalTool's, so Invoke-RawEventExport can
+    # be handed the same hashtable for either one.
     param([string]$Label, [string]$Exe, [string[]]$Arguments, [string]$WorkDir, [string]$Detail,
           [string]$StandardInput, [System.Collections.Generic.List[string]]$Capture, [string[]]$Mask,
           [switch]$NoCancel, [hashtable]$Progress, [scriptblock]$LogWriter,
           # Below-normal priority: a queued scan must not slow the operator's
           # own collection or the window.
-          [switch]$Low)
+          [switch]$Low,
+          # Called with -Capture's lines whenever more arrive; its Done, Total
+          # and Text become the queue row's bar and words.
+          [scriptblock]$Status)
     if (-not $WorkDir) { $WorkDir = Split-Path -Parent $Exe }
     Initialize-ProcessPump
     if ($LogWriter -and $Label) { & $LogWriter "> $Label $Detail" }
     $pump = New-Object EvtxerProcessPump($Exe, (ConvertTo-ProcessArgumentLine $Arguments), $WorkDir, $StandardInput)
     if ($Low) { try { (Get-Process -Id $pump.Id).PriorityClass = 'BelowNormal' } catch { } }
-    $killed = $false
+    $killed = $false; $statusAt = -1
     try {
         while ($true) {
             # IsDone BEFORE draining - see Invoke-ExternalTool.
@@ -4957,6 +5480,11 @@ function Invoke-PumpedTool {
             }
             if ($done) { break }
             if ($Progress) { $Progress.Cpu = $pump.CpuTime.TotalSeconds }
+            if ($Status -and $Progress -and $null -ne $Capture -and $Capture.Count -ne $statusAt) {
+                $statusAt = $Capture.Count
+                $st = & $Status $Capture
+                $Progress.Done = $st.Done; $Progress.Total = $st.Total; $Progress.Note = $st.Text
+            }
             if ($Progress -and $Progress.Cancel -and -not $NoCancel -and -not $killed) { $killed = $true; $pump.Kill() }
             Start-Sleep -Milliseconds 100
         }
@@ -4972,8 +5500,13 @@ function Publish-EcsFile {
     # HTTP error throws. The caller keeps its own screen: -Log ($text, $kind),
     # -OnCheck ($lines) while checking, -OnBatch ($tally, $docs) per batch.
     param([string]$Base, [hashtable]$Headers, [string]$Index, [string]$Path,
-          # index-template.json's text.
+          # index-template.json's text (raw-index-template.json for raw events).
           [string]$Template,
+          # The template's name in Elasticsearch: hayabusa-evtx (hayabusa-*),
+          # or hayabusa-raw (hayabusa-raw-*) - never one over the other.
+          [string]$TemplateName = 'hayabusa-evtx',
+          # What a document is, in the messages: detection, or raw event.
+          [string]$Noun = 'detection',
           # Counted under when the file carries no import.id of its own.
           [string]$ImportId,
           [int]$BatchSize = 2000, [switch]$Overwrite,
@@ -4985,6 +5518,11 @@ function Publish-EcsFile {
     # The last point before the write, and the only one every upload passes.
     if (-not (Test-HayabusaIndexName $Index)) {
         throw "refusing to write to '$Index'. An index name must start with 'hayabusa-' and contain only lowercase letters, digits, dot, dash or underscore."
+    }
+    # Detections never into the raw events' pattern: they would get the raw
+    # mapping and vanish from every detection dashboard (review, v81).
+    if ($TemplateName -eq 'hayabusa-evtx' -and $Index -like 'hayabusa-raw-*') {
+        throw "refusing to write detections to '$Index': hayabusa-raw-* is the raw events' index. Pick another name."
     }
 
     # ---- the batch: checked, then streamed ----------------------------------
@@ -5005,7 +5543,7 @@ function Publish-EcsFile {
         return $r
     }
     if ($check.MissingId) {
-        & $Log ("$('{0:N0}' -f $check.MissingId) document(s) carry no detection id - this ecs.jsonl was converted by an older version. " +
+        & $Log ("$('{0:N0}' -f $check.MissingId) document(s) carry no $Noun id - this file was converted by an older version. " +
                 "They are uploaded, but uploading them again would double them. Convert the EVTX again to get duplicate protection.`n") 'warn'
     }
 
@@ -5014,9 +5552,9 @@ function Publish-EcsFile {
     # when it is created, below.
     $noTemplate = $false
     try {
-        Invoke-RestMethod -Uri "$Base/_index_template/hayabusa-evtx" -Method Put -Headers $Headers `
+        Invoke-RestMethod -Uri "$Base/_index_template/$TemplateName" -Method Put -Headers $Headers `
             -ContentType 'application/json' -Body $Template -TimeoutSec 60 | Out-Null
-        & $Log "Index template installed (hayabusa-*)`n" 'ok'
+        & $Log "Index template installed (${TemplateName}: $((($Template | ConvertFrom-Json).index_patterns) -join ', '))`n" 'ok'
     } catch {
         if ($_.Exception.Message -notmatch '403') { throw }
         $noTemplate = $true
@@ -5069,7 +5607,7 @@ function Publish-EcsFile {
         try {
             $legacy = [long](Invoke-EsJson -Uri "$Base/$Index/_count" -Method Post -Headers $Headers -ContentType 'application/json' `
                                 -Body '{"query":{"bool":{"must_not":{"exists":{"field":"event.id"}}}}}' -TimeoutSec 30).count
-            if ($legacy) {
+            if ($legacy -and $Noun -eq 'detection') {
                 & $Log ("'$Index' holds $('{0:N0}' -f $legacy) detection(s) uploaded before v36, without a detection id. " +
                         "If this batch repeats any of their logs, those will be stored a second time - use a new index for re-uploads.`n") 'warn'
             }
@@ -5086,8 +5624,8 @@ function Publish-EcsFile {
     $r.Created = $tally.Created; $r.Updated = $tally.Updated; $r.Duplicate = $tally.Duplicate
     $r.Failed = $tally.Failed; $r.Errors = @($tally.Errors)
     if ($tally.FieldsRefused) {
-        & $Log ("$('{0:N0}' -f $tally.FieldsRefused) detection(s) were refused for their event fields (a field whose shape clashed, or the index's field limit) " +
-                "and were stored WITHOUT winlog.event_data instead, tagged '$($script:FieldsRefusedTag)'. Their fields are still in hayabusa.details and the local results file.`n") 'warn'
+        & $Log ("$('{0:N0}' -f $tally.FieldsRefused) $Noun(s) were refused for their event fields (a field whose shape clashed, or the index's field limit) " +
+                "and were stored WITHOUT winlog.event_data instead, tagged '$($script:FieldsRefusedTag)'. Their fields are still in $(if ($Noun -eq 'detection') { 'hayabusa.details and ' })the local results file.`n") 'warn'
     }
 
     Invoke-RestMethod -Uri "$Base/$Index/_refresh" -Method Post -Headers $Headers -TimeoutSec 60 | Out-Null
@@ -5096,7 +5634,7 @@ function Publish-EcsFile {
             "`nfailed           : $($r.Failed)`n") 'plain'
     foreach ($e in $r.Errors) { & $Log "  $($e.type): $($e.reason)`n" 'err' }
     if ($r.Duplicate) {
-        & $Log "$('{0:N0}' -f $r.Duplicate) detection(s) were already in '$Index' from an earlier upload (a re-pull, or the same logs twice). They were not added again.`n" 'info'
+        & $Log "$('{0:N0}' -f $r.Duplicate) $Noun(s) were already in '$Index' from an earlier upload (a re-pull, or the same logs twice). They were not added again.`n" 'info'
     }
 
     # Two checks, both answered by Elasticsearch: it gave a verdict on every
@@ -5124,97 +5662,11 @@ function Publish-EcsFile {
     return $r
 }
 
-function Invoke-SoImport {
-    # Raw EVTX to Security Onion: a private staging folder on the manager,
-    # each file copied with pscp, so-import-evtx run there, and the staged
-    # copies always removed. Used by the Raw Events tab and the job queue.
-    # -Run runs one program from a hashtable of Invoke-ExternalTool's
-    # parameters and returns its exit code: the tab hands it to
-    # Invoke-ExternalTool, the queue to Invoke-PumpedTool. Never throws - the
-    # cleanup must always run, so the outcome is in the result.
-    param([object[]]$Files, [string]$HostName, [int]$Port = 22, [string]$User, [string]$HostKey,
-          [string]$Password, [scriptblock]$Run, [scriptblock]$IsCancelled, [scriptblock]$Log,
-          # ($done, $total, $text) as it goes: the copies count up, then
-          # (0, 0, ...) while so-import-evtx works on the manager.
-          [scriptblock]$OnProgress)
-    if (-not $Log) { $Log = { param($t, $k) } }
-    if (-not $OnProgress) { $OnProgress = { param($d, $t, $x) } }
-    $r = [pscustomobject]@{ Outcome = 'FAILED'; Detail = ''; Error = ''; Sent = 0; Bytes = [long]0; Left = ''; Result = $null; DiskWarning = '' }
-    $soPw = $null; $soRemote = ''; $soStaged = $false
-    # One remote command; with -Sudo the password goes to plink's stdin,
-    # which plink hands to the remote command, where sudo -S reads it.
-    $soPlink = {
-        param([string]$Label, [string]$Command, [switch]$Sudo, [switch]$NoCancel)
-        $out = New-Object System.Collections.Generic.List[string]
-        $p = @{ Label = $Label; Exe = (Find-PuttyTool plink); Detail = $HostName; Capture = $out; Mask = @($Password)
-                Arguments = (Get-PlinkArgs -HostName $HostName -Port $Port -User $User -HostKey $HostKey -PasswordFile $soPw -Command $Command) }
-        if ($Sudo)     { $p.StandardInput = "$Password`n" }
-        if ($NoCancel) { $p.NoCancel = $true }
-        $code = & $Run $p
-        [pscustomobject]@{ Code = $code; Lines = @($out) }
-    }
-    try {
-        $soPw = New-PasswordFile $Password
-        $soRemote = New-SoImportStagingDir
-        & $Log "`n$('=' * 70)`nRAW EVENTS -> Security Onion $HostName ($(@($Files).Count) file(s))`nstaging: $soRemote`n$('=' * 70)`n" 'info'
-        $s = & $soPlink 'Stage on the manager' (Get-SoRemoteCommand Stage $soRemote)
-        if ($s.Code -ne 0 -or -not ($s.Lines -match 'EVTXER-STAGED')) { throw "could not create $soRemote on the manager (exit $($s.Code))" }
-        $soStaged = $true
-        # The manager's free space, read on that same call - once per import.
-        $r.DiskWarning = @(Get-SoDiskWarning @(ConvertFrom-DfOutput $s.Lines) ([long](@($Files) | Measure-Object Length -Sum).Sum)) -join ' '
-        if ($r.DiskWarning) { & $Log "LOW DISK ON THE MANAGER: $($r.DiskWarning)`n" 'warn' }
-
-        $i = 0; $n = @($Files).Count
-        foreach ($f in $Files) {
-            if (& $IsCancelled) { throw 'Cancelled by the operator.' }
-            $i++
-            & $OnProgress ($i - 1) $n "copying file $i of $n"
-            $a = Get-PscpArgs -HostName $HostName -Port $Port -User $User -HostKey $HostKey -PasswordFile $soPw `
-                    -LocalFile $f.FullName -RemotePath "$soRemote/$(Get-SoImportRemoteName $i $f.FullName)"
-            & $Log "copy $i/${n}: $($f.FullName) ($(Format-ByteSize $f.Length))`n" 'plain'
-            $code = & $Run @{ Label = "Copy $i/$n"; Exe = (Find-PuttyTool pscp); Arguments = $a; Detail = $f.Name; Mask = @($Password) }
-            if ($code -ne 0) { throw "copying $($f.Name) failed (pscp exit $code)" }
-            $r.Sent++; $r.Bytes += $f.Length
-        }
-
-        if (& $IsCancelled) { throw 'Cancelled by the operator.' }
-        # Not cancellable once started: killing plink would not stop the
-        # importer on the manager, the cleanup would then delete files it is
-        # still reading, and Security Onion marks each file imported as it
-        # goes - a half-imported file would be skipped on every later try.
-        & $Log "`nRunning so-import-evtx on the manager (Cancel waits for it to finish)...`n" 'info'
-        & $OnProgress 0 0 'Security Onion is importing them'
-        $imp = & $soPlink 'so-import-evtx' (Get-SoRemoteCommand Import $soRemote) -Sudo -NoCancel
-        $r.Result = Get-SoImportResult $imp.Lines
-        $r.Detail = "$($r.Result.Imported) imported, $($r.Result.Skipped) already imported (skipped), $($r.Result.Warnings) warning(s)"
-        if (-not ($r.Result.Complete -and $imp.Code -eq 0)) { throw "so-import-evtx did not complete (exit $($imp.Code)): $($r.Detail) - see the log" }
-        $r.Outcome = if ($r.Result.Warnings) { 'Partial' } else { 'Success' }
-    } catch {
-        $r.Error = $_.Exception.Message
-        $r.Detail = (@($r.Detail, $r.Error) | Where-Object { $_ }) -join '; '
-        if ((& $IsCancelled) -or $r.Error -match 'Cancelled') { $r.Outcome = 'Cancelled' }
-        & $Log "RAW EVENT IMPORT FAILED: $($r.Error)`n" 'err'
-    } finally {
-        # The staged copies are evidence sitting in /tmp on someone else's
-        # server: removed whatever happened, and said so if that failed too.
-        if ($soStaged) {
-            $c = & $soPlink 'Clean up the manager' (Get-SoRemoteCommand Clean $soRemote) -NoCancel
-            if ($c.Lines -match 'EVTXER-CLEANED') { & $Log "Staging folder removed from the manager.`n" 'ok' }
-            else { $r.Left = $soRemote; & $Log "[!!] Could not remove $soRemote on the manager - delete it by hand.`n" 'err' }
-        }
-        if ($soPw) { Remove-Item -LiteralPath $soPw -Force -ErrorAction SilentlyContinue }
-    }
-    # In Detail, so the tab, the queue and the activity log carry it - on
-    # success and on the failure it may have predicted.
-    if ($r.DiskWarning) { $r.Detail = "$($r.Detail) - LOW DISK on the manager: $($r.DiskWarning.TrimEnd('.'))" }
-    return $r
-}
-
 # ---------------------------------------------------------------- job queue ---
 # Phase 2 step 2: the operator only collects. Each
 # collected host folder becomes one job, and jobs run one at a time, off the
 # window's thread: a Hayabusa scan of that folder only -> ECS -> upload,
-# appended to the mission index -> raw import to Security Onion -> archive.
+# appended to the mission index -> raw events to hayabusa-raw-<mission> -> archive.
 # Which of those a job does comes from the queue pane's switches when it is
 # queued. The queue is logs\queue.json, rewritten whole on every change (a new
 # copy, then swapped in, so a crash never leaves half a file); what each step
@@ -5223,7 +5675,7 @@ $script:QueueStepText = @{
     scan    = @{ Short = 'scan';       Run = 'Scanning with Hayabusa';       Wait = 'Waiting to scan';           Colour = '#5B9BD5' }
     ecs     = @{ Short = 'ECS';        Run = 'Converting to ECS';            Wait = 'Waiting to convert to ECS'; Colour = '#A98BD9' }
     upload  = @{ Short = 'upload';     Run = 'Uploading';                    Wait = 'Waiting to upload';         Colour = '#4FB8B0' }
-    raw     = @{ Short = 'raw import'; Run = 'Raw import to Security Onion'; Wait = 'Waiting for raw import';    Colour = '#8C93E6' }
+    raw     = @{ Short = 'raw events'; Run = 'Sending raw events';           Wait = 'Waiting to send raw events'; Colour = '#8C93E6' }
     archive = @{ Short = 'archive';    Run = 'Archiving';                    Wait = 'Waiting to archive';        Colour = '#C8A26B' }
 }
 $script:QueueColour = @{ waiting = '#E8B04A'; done = '#7EC87E'; failed = '#F2A0A0' }
@@ -5262,8 +5714,8 @@ function Read-JobQueue([string]$Path) {
     # A job that was running when EVTXER closed did not finish that step: it
     # goes back in the queue at that same step, which is safe to run again
     # (Hayabusa and ECS rewrite this job's own files, the upload refuses a
-    # detection it already holds, so-import-evtx skips a file it has, and the
-    # archive zips whatever is still there).
+    # detection or raw event it already holds, and the archive zips whatever
+    # is still there).
     $jobs = @()
     try {
         $parsed = [IO.File]::ReadAllText($Path) | ConvertFrom-Json
@@ -5356,7 +5808,7 @@ function Get-QueueJobProgress($Job, $Progress) {
     # equal share and the running step filling its own share as it goes
     # (every row shows a bar, and a working one moves).
     # Busy = a step that cannot measure itself - the Hayabusa scan prints
-    # nothing until it ends, so-import-evtx runs on the manager - and then
+    # nothing until it ends - and then
     # the bar moves without a number, with the scan's CPU time climbing, so
     # working never looks like stuck. Detail is added to the row's words.
     $n = [Math]::Max(1, @($Job.Steps).Count)
@@ -5445,20 +5897,36 @@ function Invoke-QueueStep {
                 $r.Summary = "$($p.Detail) in '$($Context.Index)'"
             }
             'raw' {
-                $row.Action = 'SO import'; $row.Protocol = 'SSH (pscp + so-import-evtx, job queue)'
-                $row.Target = $Context.SoHost; $row.Port = $Context.SoPort; $row.Account = $Context.SoUser
-                $files = @(Get-SoImportFiles $Job.Folder)
-                if (-not $files.Count) { throw "no .evtx files in $($Job.Folder)" }
-                $s = Invoke-SoImport -Files $files -HostName $Context.SoHost -Port $Context.SoPort -User $Context.SoUser `
-                        -HostKey $Context.SoHostKey -Password $Context.SoPassword -Log $qlog2 `
-                        -OnProgress { param($d, $t, $x) $qp.Done = $d; $qp.Total = $t; $qp.Note = $x } `
-                        -Run { param($p) Invoke-PumpedTool @p -Progress $qp -LogWriter $qlog } -IsCancelled { [bool]$qp.Cancel }
-                $row.Files = "$($s.Sent)/$($files.Count) EVTX"; $row.Bytes = $s.Bytes; $row.LeftOnTarget = $s.Left
-                if ($s.Result -and $s.Result.WideUrl) { $row.Output = $s.Result.WideUrl }
-                if ($s.Outcome -eq 'Cancelled') { throw 'Cancelled.' }
-                if ($s.Outcome -notin 'Success', 'Partial') { throw $s.Detail }
-                $r.Summary = $s.Detail
-                $r.Warning = $s.DiskWarning
+                # Every event of the host folder (Invoke-RawEventExport), then
+                # into hayabusa-raw-<mission> with the upload's own checks.
+                $row.Action = 'Raw upload'; $row.Protocol = 'Hayabusa search + HTTPS (Elasticsearch, job queue)'; $row.Output = $Context.RawIndex
+                $row.Target = $Context.EsHost; $row.Port = $Context.EsPort; $row.Account = $Context.EsUser
+                New-Item -ItemType Directory -Path $Job.OutDir -Force | Out-Null
+                $x = Invoke-RawEventExport -EvtxDir $Job.Folder -WorkDir $Job.OutDir -HayabusaExe $Context.HayabusaExe -ImportId $Job.ImportId `
+                        -Run { param($p) Invoke-PumpedTool @p -Progress $qp -LogWriter $qlog -Low } -Log $qlog2 -OnProgress {
+                    param($done, $all) $qp.Done = $done; $qp.Total = $all; [bool]$qp.Cancel
+                }
+                if ($x.Cancelled) { throw 'Cancelled.' }
+                if (-not $x.Ok) { throw $x.Detail }
+                # Every record unreadable is a failure, not "0 events" in green
+                # (an export layout change would otherwise pass for empty logs).
+                if ($x.Bad -and -not $x.Converted) { throw (Get-RawExportProblem $x) }
+                if ($x.Bad) { $r.Warning = "$(Get-RawExportProblem $x) - they are not in '$($Context.RawIndex)'" }
+                if (-not $x.Converted) { $r.Summary = $x.Detail; $row.Files = '0 raw events'; break }
+                $p = Publish-EcsFile -Base $Context.EsBase -Headers $Context.EsHeaders -Index $Context.RawIndex -Path $x.Path `
+                        -Template ([IO.File]::ReadAllText($Context.RawTemplatePath)) -TemplateName 'hayabusa-raw' -Noun 'raw event' `
+                        -ImportId $Job.ImportId -Log $qlog2 -OnBatch {
+                    param($t, $docs)
+                    if ($qp.Cancel) { throw 'Cancelled.' }
+                    $qp.Total = $docs; $qp.Done = $t.Created + $t.Updated + $t.Duplicate + $t.Failed
+                }
+                $row.Files = "$($p.Created) raw events"
+                if ($p.Outcome -ne 'Success') { throw "raw upload $($p.Outcome): $($p.Detail)" }
+                # Kept only while it is still needed: a clean upload has it all.
+                Remove-Item -LiteralPath $x.Path -Force -ErrorAction SilentlyContinue
+                $r.Summary = "$('{0:N0}' -f $x.Converted) raw events: $($p.Detail) in '$($Context.RawIndex)'"
+                $stale = Get-StaleDetectionsViewWarning $Context.EsBase $Context.EsHeaders
+                if ($stale) { $r.Warning = (@($r.Warning, $stale) | Where-Object { $_ }) -join ' ' }
             }
             'archive' {
                 $row.Action = 'EVTX archive'; $row.Protocol = $(if ($Context.ArchiveRoot -like '\\*') { 'SMB' } else { 'local' })

@@ -9,7 +9,7 @@ $launcher = Get-Content (Join-Path $root 'code\HayabusaMissionTool.ps1') -Raw
 $fn = [regex]::Match($launcher, '(?s)function Set-AppBusy.*?\r?\n\}').Value
 Assert-True ($fn.Length -gt 0) "the shell has one busy switch"
 Assert-True ($fn -match '\$script:Busy = \$On') "it owns the shared busy flag"
-foreach ($t in 'tabCollect','tabConvert','tabUpload','tabTakajo','tabKibana','tabSoImport','tabSettings') {
+foreach ($t in 'tabCollect','tabConvert','tabUpload','tabTakajo','tabKibana','tabSettings') {
     Assert-True ($fn -match "\`$$t") "it locks $t"
 }
 Assert-True ($fn -match 'pnlBusy') "it shows the spinner"

@@ -126,8 +126,8 @@ Assert-Equal "$($p.Pct)/$($p.Busy)/$($p.Detail)" '0/True/CPU 02:31' "the scan ca
 $p = Get-QueueJobProgress $b @{ Total = 0; Cpu = 0.2 }
 Assert-Equal $p.Detail '' "no CPU line before there is any"
 $b.Step = 3
-$p = Get-QueueJobProgress $b @{ Total = 0; Note = 'Security Onion is importing them'; Cpu = 4 }
-Assert-True ($p.Busy -and $p.Detail -eq 'Security Onion is importing them') "nor can so-import-evtx on the manager - and plink's CPU time is not shown as if it were the import's"
+$p = Get-QueueJobProgress $b @{ Total = 0; Note = 'Exporting every event'; Cpu = 4 }
+Assert-True ($p.Busy -and $p.Detail -eq 'Exporting every event') "nor can a step that reports only words - and its CPU time is not shown"
 $b.Step = 0
 $b.State = 'done'
 Assert-Equal (Get-QueueJobProgress $b $null).Pct 100.0 "done is a full bar"

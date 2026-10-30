@@ -42,14 +42,20 @@ needed.** Copy the folder, double-click, work.
 - **Upload** - streamed bulk upload into a dedicated `hayabusa-*` index (never
   into the stack's own indices). Every detection gets a stable id, so a
   re-upload adds only what is new. TLS certificates are pinned.
-- **Hunt** - nine Kibana dashboards and nine saved searches: overview, hunting,
-  MITRE ATT&CK, PEAK threat hunting, anomaly hunts (rare, new, off-hours,
-  fan-out, wrong-place, long command lines) and per-host links. Exports for
-  Kibana 9 and 8.7.
-- **Raw events** - send the `.evtx` files to Security Onion's own importer, so
-  every event is searchable beside the detections.
+- **Raw events** - every event of the logs, not only the detections, into a
+  second index (`hayabusa-raw-<mission>`) with a curated set of fields for
+  endpoint and Active Directory investigation (PowerShell, command lines,
+  registry, Kerberos, services, tasks...), named like the detections' fields
+  so one query finds both. Exported by Hayabusa's `search` command, converted
+  by a compiled converter, uploaded with the same checks.
+- **Hunt** - thirteen Kibana dashboards and ten saved searches: overview, hunting,
+  MITRE ATT&CK, PEAK threat hunting on detections and on raw events (with
+  Kerberos panels), raw-event lateral movement, Active Directory and
+  persistence & evasion, anomaly hunts (rare, new, off-hours, fan-out, wrong-place,
+  long command lines), a mission timeline joining detections and raw events,
+  and per-host links. Exports for Kibana 9 and 8.7.
 - **Takajo** - CSV results or an offline HTML report, opened from disk.
-- **Queue** - each collected host runs scan, upload, raw import and archive by
+- **Queue** - each collected host runs scan, upload, raw events and archive by
   itself, in the background, one step at a time.
 - **Accountability** - an append-only activity log of every action that
   touched a target or the stack, and an optional PCAP of the session.
@@ -64,9 +70,11 @@ flowchart LR
     E --> H["Hayabusa<br/>dfir-timeline"]
     H --> J["results.jsonl"]
     J --> C["ECS conversion"]
-    C -- "bulk upload<br/>hayabusa-* index" --> K[("Elastic /<br/>Security Onion")]
+    C -- "bulk upload<br/>hayabusa-mission-*" --> K[("Elastic /<br/>Security Onion")]
     J --> TK["Takajo<br/>HTML report"]
-    E -- "so-import-evtx" --> K
+    E --> S["Hayabusa<br/>search (every event)"]
+    S --> R["raw event conversion"]
+    R -- "bulk upload<br/>hayabusa-raw-*" --> K
     K --> D["Kibana dashboards"]
 ```
 
@@ -79,7 +87,6 @@ flowchart LR
    |---|---|
    | `code/hayabusa-x64/` | The contents of `hayabusa-4.2.0-win-x64.zip` from [Hayabusa's releases](https://github.com/Yamato-Security/hayabusa/releases/tag/v4.2.0) (the x64 build, with its `rules/` and `config/`). |
    | `code/takajo/` | The contents of `takajo-2.16.1-win-x64.zip` from [Takajo's releases](https://github.com/Yamato-Security/takajo/releases/tag/v2.16.1). |
-   | `code/putty/` | `plink.exe`, `pscp.exe` and PuTTY's `LICENCE` from [PuTTY](https://www.chiark.greenend.org.uk/~sgtatham/putty/) - only for the Raw Events tab. |
 
 3. **Run it.** Double-click `EVTXER.cmd`. It starts PowerShell
    with the execution policy bypassed for that one process only, and asks
@@ -94,10 +101,10 @@ target side needs nothing installed.
 
 ## Elastic and Security Onion
 
-- **Security Onion 2.4** - upload, dashboards (imported by the tool) and raw
-  `.evtx` import all work.
-- **Plain Elastic (8.7 and 9.x)** - upload works; import the dashboards by
-  hand. [kibana/ELASTIC-SETUP.txt](kibana/ELASTIC-SETUP.txt) creates a
+- **Security Onion 2.4** - upload of detections and raw events, and the
+  dashboards (imported by the tool).
+- **Plain Elastic (8.7 and 9.x)** - upload of detections and raw events works;
+  import the dashboards by hand. [kibana/ELASTIC-SETUP.txt](kibana/ELASTIC-SETUP.txt) creates a
   least-privilege upload role and user, and [kibana/IMPORT.txt](kibana/IMPORT.txt)
   covers the dashboards.
 
@@ -105,7 +112,7 @@ target side needs nothing installed.
 
 | Path | What it is |
 |---|---|
-| `code/` | The tool: launcher, engine (`HayabusaLib.ps1`), collector, one `wpf-*.ps1` per tab, `assets/`, `licenses/`, `index-template.json`. |
+| `code/` | The tool: launcher, engine (`HayabusaLib.ps1`), collector, one `wpf-*.ps1` per tab, `assets/`, `licenses/`, `index-template.json` and `raw-index-template.json`. |
 | `kibana/` | Dashboard exports (Kibana 9 and the generated 8.7 file) and setup notes. |
 | `scripts/` | Python dashboard generators, the 8.7 converter, and `hayabusa_to_ecs.py` - the Python twin of the ECS conversion, kept in step by tests. |
 | `tests/` | The suite: `powershell -File tests\run-tests.ps1`. Plain assertions, no Pester. Live tests run only when their `TEST_*` variables are set. |
@@ -125,8 +132,7 @@ Use it only on systems you are authorised to examine.
 EVTXER is released under the [MIT License](LICENSE).
 
 It runs, unmodified and as separate programs, **Hayabusa** and **Takajo** by
-[Yamato Security](https://github.com/Yamato-Security) (GNU AGPLv3) and
-**PuTTY** by Simon Tatham (MIT). The detection rules are under the Detection
+[Yamato Security](https://github.com/Yamato-Security) (GNU AGPLv3). The detection rules are under the Detection
 Rule License 1.1. [code/licenses/NOTICE.txt](code/licenses/NOTICE.txt) lists
 every third-party component; that folder holds their licence texts and the
 source of the Hayabusa and Takajo versions EVTXER is built for.

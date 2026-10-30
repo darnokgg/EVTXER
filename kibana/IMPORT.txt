@@ -1,7 +1,7 @@
 IMPORTING THE HAYABUSA DASHBOARDS INTO ANOTHER KIBANA
 ====================================================
 
-There are TWO files with the same 171 objects. Pick by the target Kibana's
+There are TWO files with the same 221 objects. Pick by the target Kibana's
 version (Kibana: Help menu "?" top right -> About):
 
     Kibana 9.0.8 or newer  ->  hayabusa-kibana-objects.ndjson
@@ -9,14 +9,14 @@ version (Kibana: Help menu "?" top right -> About):
                                (e.g. a stack on 8.7.0)
 
 The 8.7 file was tested by importing it into a clean Elasticsearch + Kibana
-8.7.0: all 171 objects import, all 9 dashboards and 9 saved searches render.
+8.7.0: all 221 objects import, all 13 dashboards and 10 saved searches render.
 It is generated, not hand-edited - rebuild it with
     python scripts\convert_dashboards_87.py
 after re-exporting the main file.
 
 Each file holds everything:
 
-    9 dashboards      Hayabusa - EVTX Detection Overview
+    13 dashboards     Hayabusa - EVTX Detection Overview
                       Hayabusa - Threat Hunting
                       Hayabusa - Behavioural Analytics
                       Hayabusa - PEAK Hunt   (rarest-first hunting tables;
@@ -27,39 +27,54 @@ Each file holds everything:
                       Hayabusa - Results Summary   (Hayabusa's own end-of-scan
                         summary and logon-summary, rebuilt in Kibana;
                         built by scripts\make_summary_dashboard.py)
-                      Raw Events - PEAK Hunt (Security Onion)   (EVERY raw
-                        Windows event so-import-evtx put in Security Onion,
-                        rarest first - PowerShell, command lines, LOLBins,
-                        logons, services, tasks, accounts, cleared logs,
-                        Defender, LSASS; built by
-                        scripts\make_raw_hunt_dashboard.py)
+                      Raw Events - PEAK Hunt   (EVERY Windows event EVTXER
+                        sent to hayabusa-raw-*, rarest first - PowerShell,
+                        command lines, LOLBins, logons, services, tasks,
+                        accounts, cleared logs, Defender, LSASS, Kerberos;
+                        built by scripts\make_raw_hunt_dashboard.py)
+                      Raw Events - Lateral Movement,
+                      Raw Events - Active Directory   and
+                      Raw Events - Persistence & Evasion   (by topic:
+                        shares, PsExec, RDP sessions, logon matrix,
+                        outbound connections; DCSync, directory changes,
+                        delegation, SID history, trusts, resets, AD CS,
+                        Kerberos encryption; autostart registry, WMI, BITS,
+                        DLLs and drivers, file drops, injection, PowerShell
+                        modules, Defender, firewall, audit policy; built by
+                        scripts\make_raw_topic_dashboards.py)
+                      Mission timeline - detections and raw events   (both
+                        indices on one timeline, per host; built by
+                        scripts\make_mission_timeline_dashboard.py)
                       Hayabusa - Anomaly Hunt   and
-                      Raw Events - Anomaly Hunt (Security Onion)   (seven
+                      Raw Events - Anomaly Hunt   (seven
                         hunts beyond rarest-first: only on one machine, new
                         lately, odd hours, wrong place, bursts, fan-out,
                         longest command lines; built by
                         scripts\make_anomaly_dashboards.py, runtime fields
                         from scripts\anomaly_runtime_fields.py)
-    9 saved searches  Hayabusa: Commands Executed, PowerShell Activity,
+    10 saved searches Hayabusa: Commands Executed, PowerShell Activity,
                       LOLBins and Scripting, Encoded / Obfuscated Commands,
                       Critical and High Only, Logon Activity,
                       Detections with an IP, PowerShell Script Blocks;
-                      Raw events: PowerShell script blocks (4104)
-    151 Lens panels   the charts inside the dashboards
-    2 data views      "Hayabusa EVTX detections" -> index pattern hayabusa-*
-                      (carries the friendly field names, e.g. "Computer");
-                      "Raw Windows events (Security Onion)" ->
-                      logs-import-so*,logs-windows.*,logs-system.*, time
-                      field event.created (when the event happened - Security
-                      Onion 2.4 files imports under the IMPORT time)
+                      Raw events: PowerShell script blocks (4104);
+                      Mission timeline - detections and raw events
+    195 Lens panels   the charts inside the dashboards
+    3 data views      "Hayabusa EVTX detections" -> hayabusa-*,-hayabusa-raw-*
+                      (detections only; carries the friendly field names,
+                      e.g. "Computer");
+                      "Raw Windows events (EVTXER)" -> hayabusa-raw-*
+                      (every event EVTXER sent);
+                      "Mission - everything" -> hayabusa-* (both; event.kind
+                      is alert for a detection, event for a raw event)
+                    All three are timed by @timestamp - when the event happened.
 
 Exported from Kibana 9.0.8.
 
-The Raw Events dashboard reads Security Onion's raw Windows events
-(logs-import-so*, logs-windows.*, logs-system.*), not hayabusa-*. Whoever
-opens it needs read access to those indices - a Security Onion analyst has
-it. On a plain Elastic stack without those indices it simply stays
-empty; the Hayabusa dashboards are unaffected.
+Importing replaces an older copy of these objects - a Kibana that has the
+dashboards from before v81 must be given this file before raw events are
+sent there: its detections data view was hayabusa-*, which would count raw
+events as detections. The raw dashboards stay empty until raw events
+arrive; the Hayabusa dashboards are unaffected.
 
 
 BEFORE YOU START
@@ -98,7 +113,7 @@ IMPORT (web browser, works on Security Onion and plain Kibana)
      Do NOT choose "Create new objects with random IDs" - importing twice
      would then give you two copies of everything.
 
-6. Click "Import". The summary should say 171 objects imported, with no errors.
+6. Click "Import". The summary should say 221 objects imported, with no errors.
 
 7. Menu -> Dashboards -> search "Hayabusa" -> open one.
 

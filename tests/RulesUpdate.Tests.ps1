@@ -116,7 +116,7 @@ try {
     $script:QueueRun = New-Run 'scan';        Assert-True (Test-QueueReadsRules)        "a running scan holds it back"
     $script:QueueRun = New-Run 'ecs';         Assert-True (Test-QueueReadsRules)        "so does a running conversion"
     $script:QueueRun = New-Run 'upload';      Assert-True (-not (Test-QueueReadsRules)) "an upload does not"
-    $script:QueueRun = New-Run 'raw';         Assert-True (-not (Test-QueueReadsRules)) "nor a raw import"
+    $script:QueueRun = New-Run 'raw';         Assert-True (Test-QueueReadsRules) "the raw events step does too - Hayabusa's search reads rules\config"
     $script:QueueRun = New-Run 'archive';     Assert-True (-not (Test-QueueReadsRules)) "nor an archive"
     $script:QueueRun = New-Run 'scan' $true;  Assert-True (-not (Test-QueueReadsRules)) "a scan that has finished does not"
     $script:QueueRun = $null

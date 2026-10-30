@@ -4,11 +4,11 @@
 Lens cannot pick "Sysmon's Image, else 4688's NewProcessName", lowercase a
 path, tell a system program in the wrong folder, or take a length - so these
 op.* fields do, in Painless, for both data views:
-  raw         hayabusa-raw-dataview  (Security Onion's raw imports; event.created)
+  raw         hayabusa-raw-dataview  (EVTXER's raw events, hayabusa-raw-*; @timestamp)
   detections  hayabusa-evtx-dataview (Hayabusa detections;            @timestamp)
 
-They read the stored event (params._source), not doc values: Security Onion
-maps winlog.event_data.* as keywords with an ignore_above, so a long command
+They read the stored event (params._source), not doc values: the templates
+map winlog.event_data.* as keywords with an ignore_above, so a long command
 line has no doc value at all, and a field one index never saw cannot throw.
 
 Like every runtime field here they live ONLY in the data views of the shipped
@@ -22,10 +22,7 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from make_raw_hunt_dashboard import HOST_APPLICATION_SCRIPT  # noqa: E402
-
-TIME = {"raw": "event.created", "detections": "@timestamp"}
+TIME = {"raw": "@timestamp", "detections": "@timestamp"}
 
 # Where each value comes from, best first.
 SOURCES = {
@@ -190,7 +187,9 @@ def runtime_fields(view):
         "op.CmdLine": _keyword(PRELUDE + f"String c = pick(params._source, {lst(src['cmd'])}); if (c == null) return; emit(c);"),
     }
     if view == "raw":
-        f["op.HostApplicationLen"] = _long(HOST_APPLICATION_SCRIPT.replace("emit(v.trim());", "emit((long) v.trim().length());"))
+        # A real field since v81 (pulled out of the classic log's text when converted).
+        f["op.HostApplicationLen"] = _long(PRELUDE + "String c = pick(params._source, ['winlog.event_data.HostApplication']); "
+                                           "if (c == null) return; emit((long) c.trim().length());")
     return f
 
 

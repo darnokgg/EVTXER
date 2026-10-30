@@ -131,7 +131,7 @@ Assert-True ($src -match '\$tip\.PlacementTarget = \$s') "the (?) click opens a 
 foreach ($opt in 'chkRefresh', 'chkAppend', 'rbTlsPin', 'rbTlsSkip', 'chkCsv', 'chkSkipCertCheck', 'chkPcapRemind', 'chkAutoUpload', 'chkAutoRaw') {
     Assert-True ($src -match "(?s)x:Name=`"$opt`"[^>]*ToolTip=`"") "$opt explains itself (its (?) has something to show)"
 }
-foreach ($label in 'Mission name', 'Index name \*', 'Archive folder', 'Host key \*') {
+foreach ($label in 'Mission name', 'Index name \*', 'Archive folder') {
     Assert-True ($src -match "(?s)Text=`"$label`"[^>]*ToolTip=`"") "the '$label' label explains its field"
 }
 
@@ -149,9 +149,10 @@ $nc = (Get-ToolSourceLines | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
 Assert-True ($nc -notmatch '& \$exe @') "no tab runs Hayabusa or Takajo inline any more"
 Assert-True ($nc -notmatch '(?m)^\s*\$summary = Invoke-EvtxCollection') "the collection is not run on the UI thread"
 Assert-True ($nc -match "Start-LibJob 'Invoke-EvtxCollection'") "the collection runs as a background job"
-Assert-Equal ([regex]::Matches($nc, 'Invoke-ExternalTool -Label').Count) 4 "the scan, the CSV pass, Takajo and the Raw Events tab's host-key read all go through the runner"
-Assert-True ((Get-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'code\wpf-soimport.ps1') -Raw) -match 'Run \{ param\(\$p\) Invoke-ExternalTool @p') "and so do its copies and remote commands, from Invoke-SoImport"
-Assert-True ((Get-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'code\wpf-soimport.ps1') -Raw) -match 'Invoke-ExternalTool @p') "and its plink calls too"
+Assert-Equal ([regex]::Matches($nc, 'Invoke-ExternalTool -Label').Count) 3 "the scan, the CSV pass and Takajo all go through the runner"
+Assert-True ((Get-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'code\wpf-convert.ps1') -Raw) -match 'Run \{ param\(\$p\) Invoke-ExternalTool @p') "and so does the raw event export, from Invoke-RawEventExport"
+Assert-True (-not (Test-Path (Join-Path (Split-Path -Parent $PSScriptRoot) 'code\wpf-soimport.ps1'))) "the Raw Events tab (SSH to Security Onion) is gone (v81)"
+Assert-True (-not (Test-Path (Join-Path (Split-Path -Parent $PSScriptRoot) 'code\putty'))) "and PuTTY with it"
 Assert-True ($nc -match 'x:Name="btnCancel"') "there is a Cancel button"
 Assert-True ($nc -match 'x:Name="chkConsole"') "there is the console-window option"
 
@@ -169,7 +170,7 @@ $set = Get-Content (Join-Path $root 'code\wpf-settings.ps1') -Raw
 # The tabs read $script:Folders.Evtx when they run; only the two boxes filled
 # at startup hold a copy, and they must follow a change.
 Assert-True ($set -match '\$txtEvtx\.Text -eq \$old')     "Convert's folder box follows a new drop folder"
-Assert-True ($set -match '\$txtSoFolder\.Text -eq \$old') "and so does Raw Events'"
+Assert-True ($set -notmatch 'txtSoFolder')               "and nothing is left of the Raw Events tab's"
 Assert-True ($set -match "Start-LibJob 'Compress-EvtxFolder'") "archiving runs in the background, not on the window's thread"
 Assert-True ($set -match "MessageBox\]::Show\(\`$ask, 'Archive', 'YesNo'") "deleting evidence is confirmed first"
 Assert-True ($set -match "New-LedgerRow -Action 'EVTX archive'") "every archived host folder is in the activity log"

@@ -57,7 +57,7 @@ command line - that needs the machine's admin, not this tool.
 Requires Windows x64 and PowerShell 5.1 (built into Windows 10/11).
 
 
-THE EIGHT TABS
+THE SEVEN TABS
 --------------
 
 1. Collect                  Pull .evtx from remote hosts over SMB or WinRM
@@ -65,53 +65,56 @@ THE EIGHT TABS
                             Lands in evtx\<hostname>_<timestamp>\
 
 2. Convert                  Scan those logs with Hayabusa. Writes two files -
-                            see below. + beside Browse adds more EVTX folders
-                            (Ctrl-click several); all are scanned together
-                            into one result, - takes one away.
+                            see below - and, ticked by default, every raw
+                            event as well (raw-ecs.jsonl). + beside Browse
+                            adds more EVTX folders (Ctrl-click several); all
+                            are scanned together into one result, - takes
+                            one away.
 
-3. Upload                   Ship the detections to an Elasticsearch index.
+3. Upload                   Ship the detections to an Elasticsearch index,
+                            and the raw events beside them to the mission's
+                            raw index. Then lists what to paste where in
+                            Kibana, each with a Copy button.
 
 4. Takajo                   CSV results, or an offline HTML report (OPEN
                             REPORT opens it from disk - nothing listens).
 
-5. Dashboards               Import the 9 dashboards and 9 saved searches into
-                            Kibana, using the connection from tab 3.
+5. Dashboards               Import the 13 dashboards and 10 saved searches
+                            into Kibana, using the connection from tab 3.
                             Security Onion only - on plain Elastic, import by hand.
 
-6. Raw Events               Send the .evtx themselves to the Security Onion
-                            manager and run its own importer there, so EVERY
-                            event is searchable - not only the ones a
-                            Hayabusa rule matched. Security Onion only.
-
-7. Settings                 THIS MISSION first: the mission name (see
+6. Settings                 THIS MISSION first: the mission name (see
                             MISSION), accountability PCAP (see ACCOUNTABILITY
                             PCAP) and ARCHIVE (see ARCHIVE). Then SETUP, set
                             once per machine: the EVTX drop folder and the
                             Hayabusa rules.
 
-8. Guide                    A cheat sheet: a short answer to each thing that
-                            is not obvious (times in Security Onion, from a
-                            detection to the full log, where data lands,
+7. Guide                    A cheat sheet: a short answer to each thing that
+                            is not obvious (from a detection to the full
+                            log, where data lands,
                             duplicates, what Archive deletes, passwords...).
                             Its search box searches the cheat sheet AND this
-                            whole README; its More button opens the chapter.
-                            Usable while a job runs.
+                            whole README and lists the README lines found -
+                            click one to open the README right there. README
+                            opens the whole manual in a reading window: the
+                            chapters on the left, every chapter named in the
+                            text a link to it, Ctrl+F to find. Usable while
+                            a job runs.
 
 THE TOP BAR shows at a glance whether the mission is ready. Click a pill to
 open the tab that fixes it:
 
     Mission   green once the mission is named (Settings tab)
-    ELK       green once VERIFY CONNECTIVITY passed (Upload tab)
-    SO        green once the Raw Events tab is filled in - only needed
-              for raw imports, so grey is fine on a plain Elastic stack
+    ELK       green once VERIFY CONNECTIVITY passed (Upload tab) - the one
+              connection detections and raw events both go over
     PCAP      red, dot pulsing, while an accountability capture records;
               grey "No PCAP" when none does (hover for the file)
 
 "Things are cookin'" joins them while anything runs. A usual mission: name
 it, START CAPTURE, VERIFY CONNECTIVITY, then collect - the queue does the
-rest. After an upload or a raw import the log says where the data shows:
-detections only in Kibana (their own index, so not in Security Onion's Hunt
-or Alerts), raw events in Security Onion's Hunt and Dashboards too.
+rest. After an upload the log says where the data shows: in Kibana, each
+kind in its own index (so not in Security Onion's Hunt or Alerts) - see
+EVERY RAW EVENT, NOT JUST DETECTIONS.
 
 The log is the pane on the RIGHT. Drag the bar between it and the tabs to
 make it wider; the width is remembered. While a job runs, the line above the
@@ -501,8 +504,8 @@ THINGS WORTH KNOWING
 
 - Hayabusa outputs only events that MATCH A RULE, not every record. After
   each scan the log says how much: "COVERAGE: 3,140 of 7,053 event records
-  matched a rule". To have every raw event searchable as well, use Security
-  Onion's own importer (below).
+  matched a rule". Every event is in the raw events - see EVERY RAW EVENT,
+  NOT JUST DETECTIONS.
 
 - In Kibana's Discover the rule bookkeeping (rule author, rule file, rule
   dates, import file, ECS version...) is hidden by the data view's field
@@ -543,8 +546,8 @@ THINGS WORTH KNOWING
   used to sit on the Overview and PEAK dashboards. Only detections whose
   rule carries an ATT&CK tag appear there; its first panel says how many.
 
-- "Raw Events - Anomaly Hunt (Security Onion)" and "Hayabusa - Anomaly
-  Hunt" (every raw event / the detections; the second also works on plain Elastic)
+- "Raw Events - Anomaly Hunt" and "Hayabusa - Anomaly Hunt" (every raw
+  event / the detections)
   hunt for what "rarest first" misses, in seven numbered sections:
     1. Only on one machine - programs, services, scheduled tasks, accounts,
        parent > child programs, PowerShell start lines: fewest machines first
@@ -580,34 +583,34 @@ in the QUEUE at the bottom of the window (always in sight, whatever tab is
 open), and the rest runs by itself, one host at a time:
 
     scan with Hayabusa -> convert to ECS -> upload to the mission index
-    -> raw import to Security Onion -> archive
+    -> raw events to the mission's raw index -> archive
 
 Which of those steps run is ticked on the queue pane itself, "Runs by
-itself:" (Convert, Upload, Raw import to SO, Archive when done).
-Out of the box: convert and upload ON; raw import and archive OFF (archive
-deletes the original EVTX after a verified zip, and raw import sends them to
-another server - both are your call). A change applies to hosts queued from
-then on.
+itself:" (Convert, Upload, Raw events, Archive when done).
+Out of the box: convert and upload ON; raw events and archive OFF (archive
+deletes the original EVTX after a verified zip, and raw events are many
+times the detections' volume - both are your call). A change applies to
+hosts queued from then on.
 
 The colour of a row is the step it is on or waiting for:
 
     blue    scan            purple  ECS          teal   upload
-    indigo  raw import      tan     archive
+    indigo  raw events      tan     archive
     AMBER   waiting for you - the row says what for
     green   done            red     failed or cancelled - the row says why
 
 Every row has a bar, filling left to right, for how far that host has got
 (each step an equal share). A row that is working MOVES: converting,
-uploading, archiving and the raw import count up ("copying file 37 of 149");
-the Hayabusa scan and Security Onion's own import cannot measure themselves,
-so their bar runs back and forth and the scan shows its CPU time climbing.
+uploading, archiving and the raw events count up; the Hayabusa scan and its
+raw export cannot measure themselves, so their bar runs back and forth and
+the scan shows its CPU time climbing.
 A bar that stands still is waiting - the row says what for.
 
 A job waits (amber) instead of failing when it needs you:
 - upload: name the mission (Settings tab) and press VERIFY CONNECTIVITY on
   the Upload tab. With "Remember password" ticked, that is one click per
   session.
-- raw import: fill in the Raw Events tab - host, user, password, host key.
+- raw events: the same as upload - they go over the same connection.
 While one host waits, the next one is scanned; the waiting one goes on by
 itself as soon as it has what it needs.
 
@@ -639,8 +642,8 @@ machine folders from anywhere else - pick machine folders (Ctrl-click for
 several at once), or folders that each hold several - without changing the
 drop folder; press it again for another location. With
 Convert and Upload ticked, every host is scanned, converted and uploaded to
-the mission index (Security Onion's Elasticsearch) by itself; tick Raw import
-to SO as well to send every raw event too. The Convert tab never uploads by
+the mission index (Security Onion's Elasticsearch) by itself; tick Raw events
+as well to send every raw event too. The Convert tab never uploads by
 itself - after it, press UPLOAD on the Upload tab.
 
 Adding more hosts later: same mission name, Add folders... again. They go
@@ -705,14 +708,16 @@ MISSION (SETTINGS TAB)
 
 Name the mission once (e.g. op-falcon). Every upload of it goes into one
 index, hayabusa-mission-op-falcon - the same index on every day and for every
-host, appended to. A detection is never stored twice: each has a fixed ID.
+host, appended to - and its raw events into hayabusa-raw-op-falcon. Nothing
+is ever stored twice: every detection and every raw event has a fixed ID.
 "Use on the Upload tab" puts that index in the Upload tab (and the tab starts
-on it when EVTXER opens).
+on it when EVTXER opens). See FINDING YOUR DATA: INDEX NAMES AND WHERE TO LOOK.
 
-When the mission is over, "Delete mission index..." removes it: it needs a
-verified connection on the Upload tab, shows how many detections are in it,
-and deletes only after you type the index name exactly. It can only ever
-delete that one hayabusa- index. The deletion is in the activity log.
+When the mission is over, "Delete mission index..." removes both: it needs a
+verified connection on the Upload tab, shows how many detections and raw
+events are in them, and deletes only after you type the index name exactly.
+It can only ever delete those two hayabusa- indices. The deletion is in the
+activity log.
 
 
 ONE OPERATOR AT A TIME
@@ -729,7 +734,7 @@ REMEMBERED PASSWORDS
 --------------------
 
 Passwords are not saved unless you tick "Remember" beside one (Upload tab:
-Elasticsearch; Raw Events tab: SSH). Then, after a SUCCESSFUL check, it is
+Elasticsearch). Then, after a SUCCESSFUL check, it is
 kept encrypted with Windows' own DPAPI for your Windows account on this
 machine:
 - in your profile (%LOCALAPPDATA%\EVTXER\secrets), never in the tool
@@ -763,7 +768,7 @@ uses its dumpcap.
   It is only a viewer: it keeps the last few MB, and closing it does not stop
   the recording.
 - Before every network action - collect, verify, test ports, upload, index
-  check, dashboards, certificate fetch, raw import, archive to a share - EVTXER
+  check, dashboards, certificate fetch, raw events, archive to a share - EVTXER
   asks "Is accountability PCAP started?":
     START CAPTURE   start it now, then carry on
     OK              carry on without one (noted in the log)
@@ -835,65 +840,119 @@ log Notepad opens after a job), queue\ (each queued job's steps) and the
 activity log.
 
 
-EVERY RAW EVENT, NOT JUST DETECTIONS (SECURITY ONION)
------------------------------------------------------
+EVERY RAW EVENT, NOT JUST DETECTIONS
+------------------------------------
 
-Security Onion has its own EVTX importer, so-import-evtx, that indexes every
-record, raw, into its own logs-import-so data stream (not hayabusa-*). Tab 6
-runs it for you:
+Hayabusa outputs only the events a rule matched - on a typical machine a
+few percent of the log. EVTXER also sends EVERY event, as raw events, into
+the mission's second index:
 
-  - Manager host, SSH user and password (an account that may sudo), then
-    Fetch the host key and confirm the fingerprint with the admin (on the
-    manager: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub). TEST
-    CONNECTION checks SSH, sudo and the importer.
-  - Folder: defaults to evtx\ (every collected host); any folder of .evtx.
-  - IMPORT TO SECURITY ONION copies the files to a private temporary folder
-    on the manager, runs sudo so-import-evtx, deletes the folder again
-    (after a failure or Cancel too) and shows the link to the events.
-  - WHEN: Security Onion 2.4 files imported events under the time of the
-    IMPORT, not when they happened (checked on 2.4.211: its importer keeps
-    the event's own time only in event.created). The link the tab shows
-    covers both - from the oldest event to tomorrow - so use it, or search
-    import.id over the last day. To sort by when things happened, add the
-    event.created column.
-  - A file already imported is skipped - Security Onion names each import
-    after the file's MD5 - so sending the same logs twice adds nothing.
-  - DISK: each import reads the manager's free space once, on the call that
-    stages the files (df of /tmp and /nsm - nothing is polled), and warns
-    "LOW DISK on the manager" when /tmp cannot hold the files or /nsm would
-    pass 85% full (Security Onion keeps a copy of the files and indexes
-    every event - about 3x the EVTX, a rough rule; Elasticsearch refuses new
-    data at 95%). A warning only: the import still runs. Before a big run,
-    check on the manager:  df -h /tmp /nsm
-  - The password is never on a command line, never in the
-    log: PuTTY's plink/pscp (code\putty) read it from a temporary file only
-    your Windows account can read, deleted straight after.
-  - The manager must be a manager-type node (standalone, eval, import or
-    manager) - so-import-evtx refuses to run anywhere else.
+    hayabusa-mission-<mission name>   detections (what a rule matched)
+    hayabusa-raw-<mission name>       raw events (every event of the logs)
 
-By hand, the same thing is:
+Both go over the Upload tab's connection (port 9200), to Security Onion or
+a plain Elastic stack alike - nothing else to set up.
 
-  1. Copy the collected .evtx files to the manager (WinSCP, or scp):
-       scp evtx\<host>_<timestamp>\*.evtx <user>@<manager>:/tmp/evtx-import/
-  2. On the manager:
-       sudo so-import-evtx /tmp/evtx-import/*.evtx
-  3. It prints a link to the imported events.
+  - HOW: Hayabusa reads the logs a second time, with no rules (its search
+    command, about a third more scan time), and EVTXER keeps the fields an
+    investigation uses: logons and failures, Kerberos (TGTs, service
+    tickets, pre-auth failures, certificate logons), accounts and groups,
+    directory changes and DCSync, processes and command lines, PowerShell
+    (script blocks, module logging, and the classic log's HostApplication
+    and command line), registry, files, injection and LSASS access, drivers
+    and DLLs, network and DNS, services, scheduled tasks, WMI persistence,
+    shares, log clearing, Defender, firewall, RDP and BITS. The rest of an
+    event's fields (error-report parameters, binary blobs) is left out. The
+    same names as the detections (host.name, user.name, source.ip,
+    process.command_line, winlog.event_data.* ...), so one query finds both.
+  - WHERE IT RUNS: the Convert tab's "Also export every raw event" (ticked
+    by default) writes raw-ecs.jsonl beside the detections; the Upload tab
+    then sends both ("Also send the raw events beside it"). Browse to a
+    raw-ecs.jsonl alone and UPLOAD sends just that. In the queue, tick Raw
+    events.
+  - TIME: @timestamp is when the event happened, as for detections.
+  - NOTHING DOUBLES: every raw event has a fixed id (the machine, the log,
+    the record number, the event id and its time); one already in the index
+    is counted as "already there" and skipped, so a re-pull adds only new
+    events.
+  - EVERY EVENT ARRIVES OR IT SAYS SO: the upload counts every event it
+    sends and asks Elasticsearch how many it now holds; a shortfall is a
+    MISMATCH, never a quiet success.
+  - SIZE: about 250 bytes per event in Elasticsearch - roughly 25 GB per
+    100 million events (a 44 GB collection is in that range). Converting
+    is quick; the upload is the long part - measured 3,500-5,700 events a
+    second into a small 4-core Security Onion, faster on a real one. The
+    disk beside the results needs about 1.5x the EVTX while it converts.
+  - NOT IN SECURITY ONION'S HUNT: the raw events are in their own index,
+    like the detections, so Kibana shows them (Discover, the Raw Events
+    dashboards, Mission timeline), not Hunt or Alerts.
+  - WINDOWS VERSIONS: Vista / 7 / 2008 R2 onward. Windows 7 without WMF 5.1
+    has no PowerShell script-block logging - the classic Windows PowerShell
+    log is its only PowerShell trail, and EVTXER pulls its command lines
+    out. XP and 2003 logs (.evt) are not supported.
 
-Or in the web interface: Grid -> the manager -> upload an .evtx; it runs the
-same importer. Search the raw events beside the Hayabusa index: detections
-for triage, raw events for context. A plain Elastic stack has no
-so-import-evtx; there, Winlogbeat can read .evtx files instead.
+After an upload the Upload tab lists what to paste where, with a Copy
+button each: the data views, KQL for this upload and for each host, how to
+tell raw events from detections, and the Dev Tools counts.
+
+The Kibana data views (the Dashboards tab imports them):
+
+    Hayabusa EVTX detections   hayabusa-*,-hayabusa-raw-*   (detections only)
+    Raw Windows events (EVTXER)  hayabusa-raw-*             (raw events only)
+    Mission - everything       hayabusa-*                   (both)
+
+"Mission - everything" and the "Mission timeline" dashboard put a host's
+detections and its raw events on one timeline: event.kind is "alert" for a
+detection and "event" for a raw event. In Discover, open a detection and
+choose "View surrounding documents" - the raw events of the same moment.
+
+The Raw Events dashboards (search "Raw Events" under Dashboards):
+
+    Raw Events - PEAK Hunt        rarest first: PowerShell, command lines,
+                                  LOLBins, logons, services, tasks, accounts,
+                                  cleared logs, Defender, LSASS, Kerberos
+    Raw Events - Anomaly Hunt     one machine only, new lately, odd hours,
+                                  wrong place, bursts, fan-out, long lines
+    Raw Events - Lateral Movement hidden shares and named pipes, PsExec and
+                                  its relatives, RDP sessions, which source
+                                  logged on to which host, outbound
+                                  connections
+    Raw Events - Active Directory DCSync, directory changes, delegation and
+                                  SPNs, account flags, SID history, trusts,
+                                  password resets, certificate requests,
+                                  Kerberos encryption (the DCs' logs)
+    Raw Events - Persistence & Evasion
+                                  autostart registry, WMI, BITS, unsigned
+                                  DLLs and drivers, files dropped in user
+                                  folders, injection, PowerShell modules,
+                                  Defender, firewall, audit policy
+
+Each panel's (i) says which log feeds it. Many need Sysmon, AD CS auditing
+or directory-service auditing, which most networks do not have: "No
+results" there means the log is not kept, not that nothing happened.
+
+Kibana on a stack whose dashboards were imported before v81 still has the
+detections data view on hayabusa-*, which would count raw events as
+detections: import the dashboards again (Dashboards tab) before sending raw
+events there.
+
+Before v81 a Raw Events tab sent the .evtx over SSH to Security Onion's own
+importer (so-import-evtx). It was removed: that importer reported "Import
+complete" even when its converter failed on a file, filed events under the
+day of the import, and ran only on Security Onion. A first start of v81
+deletes what it left (code\soimport.conf and a remembered SSH password).
 
 
 HOST LINKS - DETECTIONS AND RAW EVENTS, PER MACHINE
 ---------------------------------------------------
 
-After an upload (Upload tab) or a raw import (Raw Events tab), each machine
-gets two links under the result, and the same URLs go into the log:
+After an upload (Upload tab), each machine gets two links under the
+result, and the same URLs go into the log:
 
   Hayabusa detections   Kibana Discover, the detections data view, that
                         machine only
-  Raw events            Security Onion's dashboards, its raw events
+  Raw events            Kibana Discover, the raw events data view, that
+                        machine only
 
 Both cover ALL time: every collection ever made of that machine, so two
 missions against the same host line up on one timeline.
@@ -903,10 +962,7 @@ by the folder or the IP you typed. One machine often writes both WIN10 and
 WIN10.corp.local; the links find both, in any case.
 
 A link that cannot be built yet says why instead: the detections link
-needs one upload first (to learn the Kibana data view, then remembered),
-the raw link needs the Security Onion manager on the Raw Events tab.
-Security Onion only for the raw side - a plain Elastic stack has no raw
-events.
+needs one upload first (to learn the Kibana data view, then remembered).
 
 
 FINDING THINGS: TIME, PIVOTS, WHERE DATA LANDS
@@ -920,41 +976,33 @@ Where each kind of data goes:
       dashboards. NOT in Security Onion's Hunt or Alerts - those search
       Security Onion's own indices, and a separate index can be dropped
       cleanly. Same on a plain Elastic stack.
-  Raw events (Raw Events tab, queue's Raw import to SO)
-      Into Security Onion's own logs-import-so data stream. Seen in
-      Security Onion's Hunt and Dashboards, and in Kibana's Raw Events
-      dashboards. Security Onion only.
+  Raw events (Upload tab, queue's Raw events)
+      Into the mission's raw index, hayabusa-raw-<mission name>. Seen in
+      KIBANA: Discover (data view "Raw Windows events (EVTXER)"), the Raw
+      Events dashboards and Mission timeline. Not in Security Onion's Hunt
+      or Alerts either. Same on a plain Elastic stack.
 
-Detections are not the whole log. Hayabusa sends only what a rule matched:
-the matched events, with the fields Hayabusa extracts (winlog.event_data.*,
-hayabusa.details). The full event - and every event no rule matched - is
-only in the raw import.
+Detections are not the whole log. Hayabusa sends only what a rule matched.
+Every event - also the ones no rule matched - is in the raw events.
 
-TIME. A detection's @timestamp is when the event happened on the machine,
-in UTC (Kibana shows it in the browser's time zone). Raw events are
-different: Security Onion 2.4 files an import under the time of the
-IMPORT, so their @timestamp is when you imported them, and the event's own
-time is in event.created (checked on Security Onion 2.4.211).
-  - In Security Onion's Hunt / Dashboards: set the time range to cover the
-    import (today, if you imported today), add the event.created column
-    and sort by it.
-  - In Kibana: the Raw Events dashboards, or Discover with the data view
-    "Raw Windows events (Security Onion)". Its time field is event.created,
-    so the time picker and every chart follow when things really happened.
+TIME. @timestamp is when the event happened on the machine, in UTC, for
+detections and raw events alike (Kibana shows it in the browser's time
+zone).
 
 FROM A DETECTION TO THE FULL LOG (the pivot). Three fields name one event:
 the machine, the log and the record number. From the detection take
 
     host.name   winlog.channel   winlog.record_id
 
-and search the raw events (Hunt, or Kibana Discover with the data view
-"Raw Windows events (Security Onion)") for
+and search the raw events (Kibana Discover, data view "Raw Windows events
+(EVTXER)" or "Mission - everything") for
 
-    winlog.computer_name:"WS01" AND winlog.channel:"Security" AND winlog.record_id:12345
+    host.name:"WS01" and winlog.channel:"Security" and winlog.record_id:12345
 
-AND in capitals: Security Onion's search reads a lower-case "and" as a word
-to find, and finds nothing. The values are case-sensitive: type them
-exactly as the detection shows them. The host links (HOST LINKS above) do the machine part for you.
+The values are case-sensitive: type them exactly as the detection shows
+them. Or, in "Mission - everything", open the detection and choose "View
+surrounding documents". The host links (HOST LINKS above) do the machine
+part for you.
 
 WHICH VERSION, WHEN. Every detection EVTXER converts carries agent.version
 (the EVTXER that converted it, from v72) and event.ingested (when). agent.version : 72 in
@@ -968,7 +1016,6 @@ Security Onion's firewall only lets listed machines reach it. EVTXER needs:
 
   Upload tab            port 9200 (Elasticsearch)
   Dashboards tab        port 443  (the web interface - analysts usually have it)
-  Raw Events tab        port 22    (SSH - open to anywhere by default)
 
 USUALLY NOTHING TO DO. If uploads from this machine have worked before, or
 VERIFY CONNECTIVITY on the Upload tab succeeds, this machine is already let
@@ -1007,7 +1054,6 @@ account that signs in only through SSO may have no Security Onion password
   - Dashboards: import them by hand - in Kibana (signed in through SSO),
     Stack Management > Saved Objects > Import, the file
     kibana dashboards\hayabusa-kibana-objects.ndjson (see IMPORT.txt there).
-  - Raw imports are not affected: they use an SSH account on the manager.
   - Or ask the administrator for a local (non-SSO) account for EVTXER.
 
 SAFER: AN API KEY THAT CAN ONLY TOUCH hayabusa-* INDEXES. A SOC
@@ -1031,10 +1077,6 @@ Dashboards tab still needs a username and password (the key cannot import
 dashboards). On Elastic 8.7 the same recipe should work - the API
 is the same - but it was tested on Elasticsearch 9 only.
 
-When imported raw events are searched, remember Security Onion 2.4 files them
-under the time they were IMPORTED; the event's own time is event.created
-(the "Raw Events - PEAK Hunt" dashboard already uses it).
-
 
 PLAIN ELASTIC (NOT SECURITY ONION)
 ----------------------------------
@@ -1049,8 +1091,13 @@ The same tool works against a plain Elastic stack
   ELASTIC-SETUP.txt. The Upload tab works the same on Security Onion
   and on plain Elastic.
 
+- RAW EVENTS: the same connection and the same account - they go into
+  hayabusa-raw-<mission>, which the hayabusa-* role in ELASTIC-SETUP.txt
+  already covers.
+
 - NO "Open in Kibana" LINK after an upload with the restricted account. That
-  is expected. Open Discover and pick "Hayabusa EVTX detections".
+  is expected. Open Discover and pick "Hayabusa EVTX detections" (or "Raw
+  Windows events (EVTXER)", or "Mission - everything").
 
 - DASHBOARDS: tab 5 is for Security Onion only. On plain Elastic, import
   kibana dashboards\hayabusa-kibana-objects-8.7.ndjson by hand -
@@ -1060,8 +1107,8 @@ The same tool works against a plain Elastic stack
 THIRD-PARTY SOFTWARE
 --------------------
 
-EVTXER runs Hayabusa and Takajo (both by Yamato Security, GNU AGPLv3) and
-PuTTY (Simon Tatham, MIT licence) as separate programs, unmodified. The
+EVTXER runs Hayabusa and Takajo (both by Yamato Security, GNU AGPLv3) as
+separate programs, unmodified. The
 detection rules are under the Detection Rule License 1.1, and each rule's
 author stays with its detections (rule.author). code\licenses\NOTICE.txt
 lists every component with its copyright and licence, and that folder holds
@@ -1091,14 +1138,168 @@ FOLDER CONTENTS
     code\                     every script, one file per tab
     code\hayabusa-x64\        Hayabusa 4.2.0 + rules (rules of 21 Oct 2026)
     code\takajo\              Takajo 2.16.1 + templates
-    code\putty\               PuTTY 0.85 plink + pscp (tab 6), signed by
-                              its author; LICENCE beside them
     code\assets\              the EVTXER window icon
     code\licenses\            licences of everything EVTXER ships that it
                               did not write, and the source of Hayabusa
                               and Takajo - see THIRD-PARTY SOFTWARE
-    code\index-template.json  the Elasticsearch index template
+    code\index-template.json  the Elasticsearch index template (detections)
+    code\raw-index-template.json  the same for the raw events
     code\importer.conf        the Upload tab's saved settings (after first use)
     code\settings.conf        the Settings tab's drop and archive folders
-    code\soimport.conf        tab 6's saved settings - host, user, host key
-                              (never the password)
+
+
+FINDING YOUR DATA: INDEX NAMES AND WHERE TO LOOK
+------------------------------------------------
+
+THE INDEX NAMES. Everything EVTXER sends lands in indices whose names start
+with hayabusa- (it refuses any other name, so it never writes into the
+stack's own indices):
+
+    hayabusa-mission-<mission>   detections - what a Hayabusa rule matched
+    hayabusa-raw-<mission>       raw events - every event of the logs
+    hayabusa-<label>-<date>      detections sent with Generate on the Upload
+                                 tab instead of a mission (older habit)
+
+<mission> is the mission name from the Settings tab, in lower case, with
+anything but letters, digits, dot, dash and underscore turned into a dash:
+
+    mission "Op Falcon 2"  ->  hayabusa-mission-op-falcon-2
+                               hayabusa-raw-op-falcon-2
+
+The Settings tab shows the detections index under the mission name; the raw
+one is the same name with raw in place of mission.
+
+WHERE TO LOOK IN KIBANA (on Security Onion: Kibana from the sidebar, same
+login as Security Onion; on a plain stack: the Kibana address):
+
+  Discover       top left, the data view picker:
+                   Hayabusa EVTX detections      detections only
+                   Raw Windows events (EVTXER)   raw events only
+                   Mission - everything          both (event.kind tells them
+                                                 apart: alert / event)
+                 then the time picker: @timestamp is WHEN THE EVENT HAPPENED,
+                 so evidence from last year needs a range that reaches back
+                 (e.g. Last 5 years). A short range is the usual reason for
+                 "No results".
+  Dashboards     search "Hayabusa", "Raw Events" or "Mission timeline". They
+                 open on all time.
+  Index Management   Stack Management > Index Management, search hayabusa:
+                 the indices, their size and how many documents.
+  Dev Tools      Management > Dev Tools - paste and run:
+                   GET _cat/indices/hayabusa-*?v
+                   GET hayabusa-raw-op-falcon-2/_count
+                   GET hayabusa-mission-op-falcon-2/_count
+                   GET hayabusa-raw-op-falcon-2/_search?size=1
+
+NOT in Security Onion's Hunt, Dashboards or Alerts: those search Security
+Onion's own indices. EVTXER keeps its data apart so a mission can be deleted
+cleanly.
+
+AFTER EVERY UPLOAD the Upload tab lists what to paste where - the data
+views, KQL for this upload (import.id:"...") and for each host, and the Dev
+Tools counts - each with a Copy button, and the same lines in the log. The
+host links under the result open Discover on one machine, all time. The
+activity log (ACTIVITY LOG) has a row per upload: the Output column is the
+index, the Details column the import.id.
+
+HANDY KQL (in Discover's search bar):
+
+    host.name:"WS01"                       one machine (also WS01.corp.local:
+                                           the host links ask every form)
+    import.id:"20261029141203ab12cd34"     one upload (detections and raw)
+    event.kind:"alert"  /  event.kind:"event"   detections / raw events
+    winlog.event_id:"4624" and winlog.event_data.LogonType:"10"   RDP logons
+    winlog.event_id:"4769" and winlog.event_data.TicketEncryptionType:"0x17"
+                                           RC4 service tickets (kerberoasting)
+    powershell.file.script_block_text:*DownloadString*   download cradles
+    process.command_line:*-enc*            encoded PowerShell
+
+Values are case-sensitive: type them as Windows writes them.
+
+
+EXAMPLES: SETUPS AND WHAT HAPPENS IF ...
+----------------------------------------
+
+SETUP 1 - Security Onion, 30 machines, hands off.
+  1. Settings: name the mission (op-falcon). Point the EVTX drop folder at
+     where the collections land.
+  2. Upload tab: the manager's address, port 9200, a Security Onion user
+     (or an API key), Fetch the fingerprint, VERIFY CONNECTIVITY. Tick
+     Remember. The ELK pill turns green.
+  3. Dashboards tab: import the dashboards (once per stack).
+  4. Queue: tick Convert, Upload and Raw events (and Archive when done if
+     the drop folder is not your only copy).
+  5. Collect the machines. Each one is scanned, converted, its detections
+     and raw events sent, one machine at a time. Watch the queue rows.
+  6. Kibana: "Mission timeline", then the PEAK and Anomaly dashboards.
+
+SETUP 2 - a plain Elastic stack (8.7 or 9).
+  1. Once, on the stack: the role and user in kibana dashboards\ELASTIC-SETUP.txt.
+  2. Kibana > Stack Management > Saved Objects > Import the -8.7 file (or
+     the 9 file) - kibana dashboards\IMPORT.txt.
+  3. Then as setup 1, steps 1, 2, 4 and 5. Detections and raw events go
+     there the same way.
+
+SETUP 3 - one folder of EVTX, by hand.
+  1. Convert tab: Browse to the folder, leave "Also export every raw event"
+     ticked, SCAN + CONVERT.
+  2. Upload tab: the file is already filled in; "Also send the raw events
+     beside it" is ticked. UPLOAD TO ELK. Read the Find-it lines under the
+     result.
+
+SETUP 4 - no stack at all (a laptop in the field).
+  Convert tab, then the Takajo tab: CSV, or the HTML report opened from
+  disk. Upload later from the same results folder.
+
+WHAT HAPPENS IF ...
+
+  ... I upload the same logs twice?
+      Nothing doubles, in either index: what is already there is counted as
+      "already in index" and skipped.
+  ... a machine is collected again a week later?
+      Only its new events are added; the overlap is recognised by its fixed
+      IDs.
+  ... a machine has no detections at all?
+      Its raw events are still exported and sent - a clean-looking machine
+      is where they matter most.
+  ... the disk beside the results is too small for the raw events?
+      The raw step stops with "not enough disk" before writing anything;
+      the detections are unaffected. Free space (about 1.5x the EVTX) and
+      press Retry.
+  ... the network drops in the middle of an upload?
+      The upload fails and says so. Press Retry (queue) or UPLOAD again:
+      what arrived is skipped as already there, the rest is sent.
+  ... some raw records cannot be read?
+      The upload goes on with the rest and the row, the tab and the
+      activity log say how many were left out. If none can be read, the
+      step fails instead of reporting zero.
+  ... the stack still has the dashboards from before v81?
+      The raw upload works, then warns that the old detections data view
+      would count raw events as detections. Import the dashboards again
+      (Dashboards tab).
+  ... I type a detections index name starting with hayabusa-raw-?
+      Refused: that is the raw events' pattern.
+  ... VERIFY CONNECTIVITY says "Nothing answered"?
+      Usually Security Onion's firewall: the message names this PC's
+      address and the command for the administrator (SECURITY ONION:
+      LETTING EVTXER IN).
+  ... a query finds nothing?
+      Widen the time picker first (the events' own dates may be old), then
+      check the data view, then the spelling (values are case-sensitive).
+  ... I close EVTXER while the queue works?
+      It asks first; the job resumes at the same step next time.
+  ... Archive is ticked?
+      After a verified zip the host's EVTX are deleted from the drop folder.
+      Leave it off if that folder is your only copy.
+  ... the target is Windows 7?
+      Fine. Without WMF 5.1 it has no PowerShell script-block logging; the
+      classic Windows PowerShell log is its trail, and EVTXER pulls the
+      command lines out of it.
+  ... the target is Windows XP or Server 2003?
+      Not supported: their logs are .evt, which Hayabusa cannot read.
+  ... Defender quarantines a results file?
+      The detections and raw events of attack logs contain attack strings.
+      See ANTIVIRUS ON THE EVTXER MACHINE.
+  ... the mission is over?
+      Settings > Delete mission index... removes both of its indices.
+

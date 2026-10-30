@@ -20,6 +20,7 @@
 # calls Update-SourceReadiness, which is defined here).
 if ($null -eq $script:ConfPath)  { $script:ConfPath  = Join-Path $script:AppRoot 'importer.conf' }
 if ($null -eq $script:Template)  { $script:Template  = Join-Path $script:AppRoot 'index-template.json' }
+if ($null -eq $script:RawTemplate) { $script:RawTemplate = Join-Path $script:AppRoot 'raw-index-template.json' }
 if ($null -eq $script:BatchSize) { $script:BatchSize = 2000 }
 if ($null -eq $script:ConnOk)    { $script:ConnOk    = $false }
 if ($null -eq $script:Taken)     { $script:Taken     = @() }
@@ -247,6 +248,11 @@ $uploadXaml = @'
                     Content="Update detections already in the index"
                     ToolTip="Off (normal): a detection already in the index - same event, same rule - is skipped and counted as 'already in index'. On: it is replaced by this upload's copy. Only for re-uploading the same logs after an EVTXER update changed the conversion. Nothing is ever stored twice either way."/>
         </StackPanel>
+        <!-- Shown when a raw-ecs.jsonl (every event, Convert tab or job queue)
+             sits beside the detections file: one click sends both. -->
+        <CheckBox x:Name="chkRawToo" IsChecked="True" Margin="0,10,0,0" Visibility="Collapsed"
+                  Content="Also send the raw events beside it (raw-ecs.jsonl) to hayabusa-raw-(mission)"
+                  ToolTip="Every event of the scanned logs, not only the detections, into the mission's raw index. Nothing is stored twice: an event already there is skipped."/>
         <TextBlock x:Name="lblResult" Margin="0,12,0,0" Text="" TextWrapping="Wrap"/>
         <!-- Filled in after a successful upload with a link carrying the data
              view, the import.id and the batch's own time span - the three
@@ -257,6 +263,9 @@ $uploadXaml = @'
                      Foreground="{DynamicResource Accent}"><Run x:Name="runKibana" Text=""/></Hyperlink>
         </TextBlock>
         <StackPanel x:Name="pnlUpHostLinks" Margin="0,10,0,0" Visibility="Collapsed"/>
+        <!-- Filled in after an upload: what to paste where, each with Copy
+             (Get-KibanaFindLines). -->
+        <StackPanel x:Name="pnlFindIt" Margin="0,14,0,0" Visibility="Collapsed"/>
       </StackPanel>
     </Border>
 
@@ -276,7 +285,8 @@ foreach ($name in @('txtSource','btnSourceBrowse','lblSource',
                     'rbTlsPin','rbTlsSkip','txtPin','btnFetch','lblPinHint',
                     'btnVerify','lblConn',
                     'txtLabel','btnGen','txtIndex','btnCheck','lblIdx','chkAppend',
-                    'btnUpload','chkRefresh','lblResult','lnkKibana','hlKibana','runKibana','pnlUpHostLinks')) {
+                    'btnUpload','chkRefresh','lblResult','lnkKibana','hlKibana','runKibana','pnlUpHostLinks',
+                    'chkRawToo','pnlFindIt')) {
     Set-Variable -Name $name -Scope Script -Value $uploadRoot.FindName($name)
 }
 
@@ -305,6 +315,7 @@ $chkShowPass.Add_Unchecked({
 # a wrong one. This asks the file.
 function Update-SourceReadiness {
     $path = $txtSource.Text.Trim()
+    $script:RawPath = $null; $chkRawToo.Visibility = 'Collapsed'
     if (-not $path) {
         $script:SourceKind = 'Missing'
         $lblSource.Text = 'Nothing loaded. Convert on the Convert tab, or Browse to an existing ecs.jsonl.'
@@ -315,6 +326,17 @@ function Update-SourceReadiness {
     $verdict = Get-JsonlKind $path
     $script:SourceKind = $verdict.Kind
 
+    if ($verdict.Kind -eq 'Raw') {
+        # A raw events file on its own: it goes to the mission's raw index.
+        # Its size, not its line count: tens of millions of lines would hold
+        # the window up here (the upload counts them, pumping, when it runs).
+        $script:EcsPath = $null; $script:RawPath = $path
+        $rawIdx = Get-RawIndexName $script:Settings.MissionName
+        $lblSource.Text = "Ready: $([IO.Path]::GetFileName($path)) - raw events, $(Format-ByteSize (Get-Item -LiteralPath $path).Length), for " +
+                          $(if ($rawIdx) { "'$rawIdx'." } else { 'hayabusa-raw-(mission) - name the mission on the Settings tab first.' })
+        $lblSource.Foreground = $script:UpBrush.ok
+        return
+    }
     if ($verdict.Kind -eq 'Ecs') {
         # Counting 32k lines is instant and only happens on Browse or after a
         # conversion, never per keystroke.
@@ -328,6 +350,12 @@ function Update-SourceReadiness {
         if ($fileImportId) { $script:ImportId = $fileImportId }
         $lblSource.Text = "Ready: $([IO.Path]::GetFileName($path)) - ECS JSONL, $('{0:N0}' -f $n) document(s)."
         $lblSource.Foreground = $script:UpBrush.ok
+        # The raw events of the SAME conversion only - one left from an earlier
+        # run has another import.id and is never offered (review, v81).
+        $beside = Join-Path (Split-Path -Parent $path) 'raw-ecs.jsonl'
+        if ($fileImportId -and (Get-JsonlKind $beside).Kind -eq 'Raw' -and (Get-JsonlImportId $beside) -eq $fileImportId) {
+            $script:RawPath = $beside; $chkRawToo.Visibility = 'Visible'
+        }
     } else {
         $script:EcsPath = $null
         $lblSource.Text = $verdict.Reason
@@ -606,18 +634,19 @@ function Set-KibanaLink {
             return
         }
 
-        $match = $null
-        foreach ($hit in $dvResp.hits.hits) {
+        # Every data view that sees the index. "Mission - everything"
+        # (hayabusa-*) sees it too, and would open this upload's import.id on
+        # its raw events as well (they share it): the detections' own view
+        # first, then any that leaves the raw events out, then any at all.
+        # id comes back as "index-pattern:<id>"; Kibana wants the id alone.
+        $cands = @(foreach ($hit in $dvResp.hits.hits) {
             $title = $hit._source.'index-pattern'.title
-            if (Test-IndexCoveredByPattern $Index $title) {
-                # id comes back as "index-pattern:<id>"; Kibana wants the id alone.
-                $match = [pscustomobject]@{ Id = ($hit._id -replace '^index-pattern:', ''); Title = $title }
-                # Remembered (importer.conf) for the host links, here and on
-                # the Raw Events tab.
-                $script:DetectionsDataViewId = $match.Id
-                break
-            }
-        }
+            if (Test-IndexCoveredByPattern $Index $title) { [pscustomobject]@{ Id = ($hit._id -replace '^index-pattern:', ''); Title = $title } }
+        })
+        $match = @(@($cands | Where-Object { $_.Id -eq 'hayabusa-evtx-dataview' }) +
+                   @($cands | Where-Object { -not (Test-IndexCoveredByPattern 'hayabusa-raw-x' $_.Title) }) + $cands) | Select-Object -First 1
+        # Remembered (importer.conf) for the host links.
+        if ($match) { $script:DetectionsDataViewId = $match.Id }
 
         if (-not $match) {
             # The trap this check exists for: the data view was hayabusa-evtx-*
@@ -656,9 +685,110 @@ function Show-UploadHostLinks([string]$Base, $Headers, [string]$Index) {
         $resp = Invoke-EsJson -Uri "$Base/$Index/_search" -Method Post -Headers $Headers `
                     -ContentType 'application/json' -Body $body -TimeoutSec 60
         $names = @($resp.aggregations.h.buckets | ForEach-Object { [string]$_.key })
+        $script:UploadHosts = $names
         if ($names.Count) { Show-HostLinks $pnlUpHostLinks $names }
     } catch {
         Write-Log "Could not list the hosts for their links: $($_.Exception.Message)`n" 'warn'
+    }
+}
+
+function Send-UploadRaw([string]$Base, $Headers) {
+    # The raw events file ($script:RawPath) into hayabusa-raw-<mission>, with
+    # the detections' checks (Publish-EcsFile). Writes its own result line and
+    # activity-log row; $true when every event arrived.
+    $rawIdx = Get-RawIndexName $script:Settings.MissionName
+    $rawClock = [Diagnostics.Stopwatch]::StartNew()
+    $rawOutcome = 'FAILED'; $rawDetail = ''; $rawNew = 0
+    $rawImport = Get-JsonlImportId $script:RawPath
+    if (-not $rawImport) { $rawImport = $script:ImportId }
+    try {
+        Write-Log "`n$('=' * 70)`nRAW EVENTS -> $rawIdx`n" 'info'
+        $rp = Publish-EcsFile -Base $Base -Headers $Headers -Index $rawIdx -Path $script:RawPath `
+                  -Template (Get-Content $script:RawTemplate -Raw) -TemplateName 'hayabusa-raw' -Noun 'raw event' `
+                  -ImportId $rawImport -BatchSize $script:BatchSize -Log { param($t, $k) Write-Log $t $k } `
+                  -OnCheck { param($n) $lblStatus.Text = "Checking the raw events: $('{0:N0}' -f $n) line(s)"; Invoke-UiPump } `
+                  -OnBatch {
+            param($t, $docs)
+            $sent = $t.Created + $t.Updated + $t.Duplicate + $t.Failed
+            $bar.Maximum = [Math]::Max($docs, 1); $bar.Value = [Math]::Min($sent, $bar.Maximum)
+            $lblStatus.Text = "Raw events $('{0:N0}' -f $sent) of $('{0:N0}' -f $docs): new $('{0:N0}' -f $t.Created), already in index $('{0:N0}' -f $t.Duplicate), failed $($t.Failed)"
+            Invoke-UiPump
+        }
+        $rawOutcome = $rp.Outcome; $rawDetail = $rp.Detail; $rawNew = $rp.Created
+        if ($rp.Outcome -eq 'Success') {
+            $lblResult.Text += "`nRaw events: $('{0:N0}' -f $rp.Created) new in '$rawIdx', $('{0:N0}' -f $rp.Duplicate) already there (not doubled).`n$(Get-WhereToLook 'raw')"
+            Write-Log "$(Get-WhereToLook 'raw')`n" 'info'
+            $stale = Get-StaleDetectionsViewWarning $Base $Headers
+            if ($stale) {
+                $lblResult.Text += "`n$stale"; $lblResult.Foreground = $script:UpBrush.err
+                Write-Log "$stale`n" 'warn'
+            }
+        } else {
+            $lblResult.Text += "`nRaw events NOT complete ($($rp.Outcome)): $($rp.Detail). See the log."
+            $lblResult.Foreground = $script:UpBrush.err
+        }
+    } catch {
+        $rawDetail = $_.Exception.Message
+        Write-Log "`nRAW EVENT UPLOAD FAILED: $rawDetail`n" 'err'
+        $lblResult.Text += "`nRaw events failed: $rawDetail"; $lblResult.Foreground = $script:UpBrush.err
+    } finally {
+        Write-Ledger @(New-LedgerRow -Action 'Raw upload' -Target $txtHost.Text.Trim() -Port (Get-UploadPort) `
+                          -Protocol 'HTTPS (Elasticsearch)' -Account (Get-EsAccountLabel $txtUser.Text) -Result $rawOutcome `
+                          -Files "$('{0:N0}' -f $rawNew) raw events" -Output $rawIdx -Seconds $rawClock.Elapsed.TotalSeconds `
+                          -Details ((@($rawDetail, "source $($script:RawPath)", "import.id $rawImport") | Where-Object { $_ }) -join '; '))
+    }
+    return ($rawOutcome -eq 'Success')
+}
+
+function Show-FindIt([string]$MissionIndex, [string]$RawIndex, [string]$ImportId) {
+    # What to paste where, filled in, each with a Copy button - and the same
+    # lines in the log (Get-KibanaFindLines).
+    $pnlFindIt.Children.Clear()
+    $lines = @(Get-KibanaFindLines -MissionIndex $MissionIndex -RawIndex $RawIndex -ImportId $ImportId -Hosts @($script:UploadHosts))
+    $head = New-Object System.Windows.Controls.TextBlock
+    $head.Text = 'Find it in Kibana - ready to paste:'; $head.FontWeight = 'SemiBold'
+    [void]$pnlFindIt.Children.Add($head)
+    foreach ($ln in $lines) {
+        $lab = New-Object System.Windows.Controls.TextBlock
+        $lab.Text = $ln.Label; $lab.Foreground = $script:UpBrush.muted; $lab.Margin = '0,8,0,2'; $lab.TextWrapping = 'Wrap'
+        [void]$pnlFindIt.Children.Add($lab)
+        $row = New-Object System.Windows.Controls.DockPanel
+        $btn = New-Object System.Windows.Controls.Button
+        $btn.Content = 'Copy'; $btn.Margin = '8,0,0,0'; $btn.MinWidth = 60; $btn.VerticalAlignment = 'Top'; $btn.Tag = $ln.Text
+        $btn.Add_Click({ param($s) try { [System.Windows.Clipboard]::SetText([string]$s.Tag) } catch { Write-Log "Could not copy: $($_.Exception.Message)`n" 'warn' } })
+        [System.Windows.Controls.DockPanel]::SetDock($btn, 'Right')
+        [void]$row.Children.Add($btn)
+        $box = New-Object System.Windows.Controls.TextBox
+        $box.Text = $ln.Text; $box.IsReadOnly = $true; $box.TextWrapping = 'Wrap'; $box.FontFamily = 'Consolas'
+        [void]$row.Children.Add($box)
+        [void]$pnlFindIt.Children.Add($row)
+    }
+    $pnlFindIt.Visibility = 'Visible'
+    Write-Log ("Find it in Kibana:`n" + (($lines | ForEach-Object { "  $($_.Label):`n    $($_.Text -replace "`n", "`n    ")" }) -join "`n") + "`n") 'info'
+}
+
+function Start-RawOnlyUpload {
+    # The Upload tab with a raw events file loaded: it goes to the mission's
+    # raw index, after the same gates as a detections upload.
+    if (-not $script:ConnOk -or $script:ConnKey -ne (Get-UploadConnKey)) {
+        Show-UploadRefusal 'Press VERIFY CONNECTIVITY and confirm it succeeds. If you changed the host, port, username or password since, verify again.' 'Verify first'
+        return
+    }
+    $rawIdx = Get-RawIndexName $script:Settings.MissionName
+    if (-not $rawIdx) { Show-UploadRefusal 'Name the mission on the Settings tab - raw events go to hayabusa-raw-(mission).' 'No mission'; return }
+    if (-not (Set-TlsTrustFromUi)) { return }
+    if (-not (Confirm-PcapBeforeNetwork 'upload raw events to Elasticsearch')) { return }
+    Set-AppBusy $true 'uploading raw events to ELK'
+    try {
+        $base = Get-EsBase; $h = Get-AuthHeader $txtUser.Text.Trim() (Get-UploadPassword)
+        $lblResult.Foreground = $script:UpBrush.ok
+        $ok = Send-UploadRaw $base $h
+        $lblResult.Text = $lblResult.Text.TrimStart()
+        $lblStatus.Text = "Raw upload: $(if ($ok) { 'Success' } else { 'FAILED' })"
+        if ($ok) { Show-FindIt (Get-MissionIndexName $script:Settings.MissionName) $rawIdx (Get-JsonlImportId $script:RawPath) }
+    } finally {
+        # Last - see the Convert tab's finally.
+        Set-AppBusy $false
     }
 }
 
@@ -675,11 +805,13 @@ function Show-UploadRefusal([string]$Message, [string]$Title) {
 $btnUpload.Add_Click({
     if ($script:Busy) { return }
     $lblResult.Text = ''; $lnkKibana.Visibility = 'Collapsed'; $pnlUpHostLinks.Visibility = 'Collapsed'
+    $pnlFindIt.Visibility = 'Collapsed'; $script:UploadHosts = @()
 
     # The gate: upload only a file that is identifiably our ECS JSONL, whether
     # it came from this session's conversion or was browsed to. Re-checked here
     # rather than trusting the label, in case the file changed underneath.
     Update-SourceReadiness
+    if ($script:SourceKind -eq 'Raw') { Start-RawOnlyUpload; return }
     if ($script:SourceKind -ne 'Ecs') {
         Show-UploadRefusal $lblSource.Text 'Cannot upload this file'
         return
@@ -693,6 +825,10 @@ $btnUpload.Add_Click({
     $idxCheck = $txtIndex.Text.Trim()
     if (-not (Test-HayabusaIndexName $idxCheck)) {
         Show-UploadRefusal "'$idxCheck' is not a valid index name. It must start with 'hayabusa-' and contain only lowercase letters, digits, dot, dash or underscore. This guard keeps the tool out of the stack's own indices (Security Onion, Elastic, ...)." 'Invalid index'
+        return
+    }
+    if ($idxCheck -like 'hayabusa-raw-*') {
+        Show-UploadRefusal "'$idxCheck' is in the raw events' index pattern (hayabusa-raw-*). Detections there would be invisible on every detection dashboard - pick another name." 'Invalid index'
         return
     }
     # The mission's index is appended to by design (the queue does the same).
@@ -777,6 +913,13 @@ $btnUpload.Add_Click({
                 Show-UploadHostLinks -Base $base -Headers $h -Index $idx
             }
             else { Write-Log "Nothing new in this batch, so no Kibana link.`n" 'info' }
+            # The raw events of the same scan, when they are beside it.
+            $rawIdx = Get-RawIndexName $script:Settings.MissionName
+            if ($chkRawToo.Visibility -eq 'Visible' -and $chkRawToo.IsChecked -eq $true -and $script:RawPath) {
+                if ($rawIdx) { [void](Send-UploadRaw $base $h) }
+                else { $lblResult.Text += "`nRaw events not sent: name the mission on the Settings tab (they go to hayabusa-raw-(mission))." }
+            }
+            Show-FindIt $idx $rawIdx $script:ImportId
         }
     } catch {
         Write-Log "`nUPLOAD FAILED: $($_.Exception.Message)`n" 'err'

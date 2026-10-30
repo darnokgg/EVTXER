@@ -118,6 +118,9 @@ $convertXaml = @'
         <CheckBox x:Name="chkCsv" Margin="0,12,0,0" IsChecked="False"
                   Content="Also write CSV (local analyst copy; upload still uses JSONL)"
                   ToolTip="Runs Hayabusa a second time to write results.csv beside the JSONL, to open in Excel or Timeline Explorer. Doubles the scan time; nothing else uses the CSV."/>
+        <CheckBox x:Name="chkRaw" Margin="0,8,0,0" IsChecked="True"
+                  Content="Also export every raw event (raw-ecs.jsonl, for hayabusa-raw-(mission))"
+                  ToolTip="Hayabusa only outputs the events a rule matched. This also exports every event of the scanned logs, with the fields an investigation uses, beside the detections; the Upload tab then sends both. Adds about a third to the scan time."/>
       </StackPanel>
     </Border>
     <Border Style="{DynamicResource CardPanel}">
@@ -147,7 +150,7 @@ $tabConvert.Content = $convertRoot
 # is not in the window's name scope, so $win.FindName() returns $null for all of
 # these.
 foreach ($name in @('txtEvtx','txtExe','txtSrc','btnEvtx','btnExe','btnBrowse','btnAddEvtx','pnlMoreEvtx',
-                    'btnConvert','btnConvertCmd','chkCsv','rbEvtx','rbJsonl',
+                    'btnConvert','btnConvertCmd','chkCsv','chkRaw','rbEvtx','rbJsonl',
                     'lblExe','lblFile','lblConv','lblPaths')) {
     Set-Variable -Name $name -Scope Script -Value $convertRoot.FindName($name)
 }
@@ -252,6 +255,19 @@ function Update-ExeState {
     }
 }
 
+function Invoke-ConvertRawEvents([string[]]$Dirs, [string]$WorkDir, [string]$ImportId) {
+    # Every event of the scanned folders, with this tab's bar - the same
+    # Invoke-RawEventExport the job queue's raw step runs.
+    Invoke-RawEventExport -EvtxDir $Dirs -WorkDir $WorkDir -HayabusaExe $txtExe.Text -ImportId $ImportId `
+        -Log { param($t, $k) Write-Log $t $k } -Run { param($p) Invoke-ExternalTool @p -WorkDir (Split-Path -Parent $p.Exe) } -OnProgress {
+        param($done, $all)
+        $bar.Value = if ($all -gt 0) { 1000.0 * $done / $all } else { 0 }
+        $lblStatus.Text = if ($all -gt 0) { "Raw events - $('{0:N0}' -f $done) of $('{0:N0}' -f $all) lines" } else { 'Raw events - reading the export' }
+        Invoke-UiPump
+        [bool]$script:CancelRequested
+    }
+}
+
 function Invoke-HayabusaScan {
     # Returns the JSONL path, or $null. The flags come from Get-HayabusaScanArgs
     # so the operator cannot omit -O and silently produce unparseable
@@ -260,6 +276,7 @@ function Invoke-HayabusaScan {
     $exe  = $txtExe.Text.Trim()
     $evtx = @(Get-ConvertEvtxFolders)
     $out  = Get-ScanOutputPath $script:Root
+    $script:ScanNoDetections = $false
     New-ParentDirectory $out
     $html = Join-Path (Split-Path -Parent $out) 'results-summary.html'
     $files = @(Get-ChildItem -LiteralPath $evtx -Recurse -Filter *.evtx -File -ErrorAction SilentlyContinue)
@@ -276,6 +293,8 @@ function Invoke-HayabusaScan {
     }
     if (-not (Test-Path $out)) {
         Write-Log "Hayabusa produced no output. No detections, or the rules folder is missing.`n" 'err'
+        # Exit 0 and nothing out: no detections - the raw events still matter.
+        $script:ScanNoDetections = $true
         return $null
     }
     if (Test-Path -LiteralPath $html) { Write-Log "Hayabusa results summary: $html`n" 'info' }
@@ -438,9 +457,33 @@ $btnConvert.Add_Click({
     $convImportId = ''
     try {
         if ($fromEvtx) {
+            # The raw events of an earlier run must never be offered beside
+            # this one's detections (review, v81).
+            Remove-Item -LiteralPath (Join-Path (Split-Path -Parent (Get-ScanOutputPath $script:Root)) 'raw-ecs.jsonl') -Force -ErrorAction SilentlyContinue
             $scanned = Invoke-HayabusaScan
             if (-not $scanned) {
-                if ($script:CancelRequested) { $convResult = 'Cancelled' } else { $convDetail = 'Hayabusa scan did not complete' }
+                if ($script:CancelRequested) { $convResult = 'Cancelled' }
+                elseif ($script:ScanNoDetections -and $chkRaw.IsChecked -eq $true) {
+                    # No detections is no reason to skip the raw events - a
+                    # clean machine is exactly where they matter.
+                    $script:ImportId = (Get-Date -Format 'yyyyMMddHHmmss') + [guid]::NewGuid().ToString('N').Substring(0,8)
+                    $convImportId = $script:ImportId
+                    $raw = Invoke-ConvertRawEvents $evtxDirs (Split-Path -Parent (Get-ScanOutputPath $script:Root)) $script:ImportId
+                    $rawProblem = Get-RawExportProblem $raw
+                    $convDetail = "no detections; raw events: $(if ($rawProblem) { $rawProblem } else { $raw.Detail })"
+                    if (-not $rawProblem -and $raw.Converted) {
+                        $convResult = 'Success'; $convOut = $raw.Path; $convDocs = "$('{0:N0}' -f $raw.Converted) raw events"
+                        if ($script:txtSource) { $script:txtSource.Text = $raw.Path }
+                        if (Get-Command Update-SourceReadiness -ErrorAction SilentlyContinue) { Update-SourceReadiness }
+                        $lblConv.Text = "No detections. $('{0:N0}' -f $raw.Converted) raw events exported - ready to upload."
+                        $lblConv.Foreground = $script:ConvBrush.Ok
+                    } else {
+                        if ($raw.Cancelled) { $convResult = 'Cancelled' }
+                        $lblConv.Text = "No detections. Raw events: $(if ($rawProblem) { $rawProblem } else { 'none in these logs' })."
+                        $lblConv.Foreground = $script:ConvBrush.Caution
+                    }
+                }
+                else { $convDetail = 'Hayabusa scan did not complete' }
                 return
             }
             $txtSrc.Text = $scanned
@@ -451,7 +494,7 @@ $btnConvert.Add_Click({
             if ($script:RunLog) { try { $cov = Get-HayabusaCoverage ([IO.File]::ReadAllText($script:RunLog)) } catch { } }
             if ($cov) {
                 $convDetail = $cov.Text
-                Write-Log "COVERAGE: $($cov.Text). Only events that match a rule are output; the rest are not in the upload. For every raw event, see so-import-evtx in README.txt.`n" 'info'
+                Write-Log "COVERAGE: $($cov.Text). Only events that match a rule are detections; every event is in the raw events ('Also export every raw event').`n" 'info'
             }
         }
         $script:ImportId = (Get-Date -Format 'yyyyMMddHHmmss') + [guid]::NewGuid().ToString('N').Substring(0,8)
@@ -495,6 +538,15 @@ $btnConvert.Add_Click({
         if ($bad) { Write-Log "WARNING: $bad lines could not be parsed and were skipped.`n" 'warn' }
         Write-Log "Converted $('{0:N0}' -f $n) documents -> $out`n" 'ok'
         $script:EcsPath = $out; $script:DocCount = $n
+        # Every event too, beside the detections - also when some detection
+        # lines were unreadable: the raw events do not depend on them.
+        $rawProblem = ''
+        if ($fromEvtx -and $chkRaw.IsChecked -eq $true) {
+            $raw = Invoke-ConvertRawEvents $evtxDirs (Split-Path -Parent $out) $script:ImportId
+            $rawProblem = Get-RawExportProblem $raw
+            if ($rawProblem) { Write-Log "RAW EVENTS: $rawProblem - the detections are converted.`n" $(if ($raw.Cancelled) { 'warn' } else { 'err' }) }
+            $convDetail = (@($convDetail, "raw events: $(if ($rawProblem) { $rawProblem } else { $raw.Detail })") | Where-Object { $_ }) -join '; '
+        }
         # Hand the result straight to the Upload tab so the common path needs
         # no file picking at all.
         # Guarded: the Upload and Takajo tabs are separate fragments, and this
@@ -512,6 +564,12 @@ $btnConvert.Add_Click({
         } else {
             $lblConv.Text = "Converted $('{0:N0}' -f $n) documents. Ready to upload."
             $lblConv.Foreground = $script:ConvBrush.Ok
+        }
+        if ($rawProblem) {
+            # Never a quiet green when the raw events are not all there.
+            $lblConv.Text += " Raw events: $rawProblem."
+            $lblConv.Foreground = $script:ConvBrush.Caution
+            if ($convResult -eq 'Success') { $convResult = 'Raw events incomplete' }
         }
     } catch {
         Write-Log "CONVERSION FAILED: $($_.Exception.Message)`n" 'err'

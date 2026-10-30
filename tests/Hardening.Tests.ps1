@@ -20,12 +20,6 @@ Assert-Equal (@($r.Invalid) -join ',') '*,..\x' "and the bad ones are named"
 $r = Test-CollectReadiness -Targets @('dc01', '192.0.2.10') -Method 'SMB' -Username 'u' -Category 'DFIR'
 Assert-True $r.Ready "a list of real names and addresses is ready"
 
-$threw = $false; try { Get-PlinkArgs -HostName '-proxycmd' -User 'u' | Out-Null } catch { $threw = $true }
-Assert-True $threw "plink is never given a host that would read as an option"
-$threw = $false; try { Get-PscpArgs -HostName '-x' -User 'u' -HostKey 'k' -PasswordFile 'p' -LocalFile 'l' -RemotePath '/tmp' | Out-Null } catch { $threw = $true }
-Assert-True $threw "nor is pscp"
-Assert-Equal ((Get-PlinkArgs -HostName 'so.example.local' -User 'u')[-1]) 'so.example.local' "a real host still works"
-
 $col = Get-Content (Join-Path $root 'code\EvtxCollector.ps1') -Raw
 Assert-True ($col -match 'function Add-CollectTrustedHosts[\s\S]{0,400}Test-TargetName') "TrustedHosts only ever gets real names"
 Assert-True ($col -match "\[SKIPPED\] '\`$bad' - not a host name or address") "the collector skips a bad target even past the form"

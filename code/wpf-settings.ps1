@@ -289,10 +289,6 @@ function Set-EvtxDropFolder([string]$Path) {
     # The boxes that were showing the old default follow it; a folder the
     # operator chose on that tab stays theirs.
     if ($txtEvtx -and $txtEvtx.Text -eq $old) { $txtEvtx.Text = $Path }
-    if ($txtSoFolder -and $txtSoFolder.Text -eq $old) {
-        $txtSoFolder.Text = $Path
-        if (Get-Command Update-SoFiles -ErrorAction SilentlyContinue) { [void](Update-SoFiles) }
-    }
     Save-SettingsTab
     Update-ArchiveList
     Write-Log "EVTX drop folder is now $Path (was $old).`n" 'info'
@@ -407,7 +403,7 @@ $btnArchive.Add_Click({
     } finally {
         # A box still naming a host folder that has just gone (Collect hands
         # Convert the host folder it filled) goes back to the drop folder.
-        foreach ($box in @($txtEvtx, $txtSoFolder)) {
+        foreach ($box in @($txtEvtx)) {
             if ($box -and $box.Text -and -not (Test-Path -LiteralPath $box.Text)) { $box.Text = $script:Folders.Evtx }
         }
         Update-ArchiveList
@@ -661,9 +657,11 @@ $btnMissionDelete.Add_Click({
     $idx = Get-MissionIndexName $txtMission.Text
     if (-not $idx) { [void][System.Windows.MessageBox]::Show('Name the mission first.', 'Mission'); return }
     if (-not (Test-DeletableIndexName $idx)) { [void][System.Windows.MessageBox]::Show("'$idx' is not an index this tool may delete.", 'Mission'); return }
-    $uploading = @($script:Jobs | Where-Object { $_ -and $_.State -ne 'done' -and @($_.Steps)[$_.Step..99] -contains 'upload' })
+    # The mission's raw events go with it (v81): its second index.
+    $rawIdx = Get-RawIndexName $txtMission.Text
+    $uploading = @($script:Jobs | Where-Object { $_ -and $_.State -ne 'done' -and (@(@($_.Steps)[$_.Step..99]) | Where-Object { $_ -in 'upload', 'raw' }) })
     if ($uploading.Count) {
-        [void][System.Windows.MessageBox]::Show("$($uploading.Count) job(s) in the queue still upload to the mission index. Let them finish, or remove them from the queue, first.", 'Mission'); return
+        [void][System.Windows.MessageBox]::Show("$($uploading.Count) job(s) in the queue still upload to the mission's indices. Let them finish, or remove them from the queue, first.", 'Mission'); return
     }
     # Verified, and still the same host, port and account: edited boxes after
     # a VERIFY would send the delete to a stack nobody checked (code review).
@@ -672,23 +670,32 @@ $btnMissionDelete.Add_Click({
     }
     if (-not (Confirm-PcapBeforeNetwork "delete the mission index $idx")) { return }
     $base = Get-EsBase; $h = Get-AuthHeader $txtUser.Text.Trim() (Get-UploadPassword)
-    $docs = $null
-    try { $docs = (Invoke-EsJson -Uri "$base/$idx/_count" -Headers $h -TimeoutSec 30).count }
-    catch { [void][System.Windows.MessageBox]::Show("$idx was not found on $($txtHost.Text.Trim()) - nothing to delete.", 'Mission'); return }
-    $text = "Delete the mission index $idx on $($txtHost.Text.Trim())?`n`nIt holds $('{0:N0}' -f $docs) detection(s). This cannot be undone - Kibana's dashboards stay, the data goes.`n`nType the index name to confirm:"
-    if (-not (Read-TypedConfirmation 'Delete mission index' $text $idx)) { Write-Log "Mission index not deleted (cancelled).`n" 'info'; return }
-    Set-AppBusy $true "deleting $idx"
-    $result = 'FAILED'; $detail = ''
+    # Whichever of the two exist, with what they hold.
+    $found = @(foreach ($pair in @(@($idx, 'detection(s)'), @($rawIdx, 'raw event(s)'))) {
+        try { [pscustomobject]@{ Index = $pair[0]; What = $pair[1]; Docs = [long](Invoke-EsJson -Uri "$base/$($pair[0])/_count" -Headers $h -TimeoutSec 30).count } } catch { }
+    })
+    if (-not $found.Count) { [void][System.Windows.MessageBox]::Show("Neither $idx nor $rawIdx was found on $($txtHost.Text.Trim()) - nothing to delete.", 'Mission'); return }
+    $list = ($found | ForEach-Object { "  $($_.Index) - $('{0:N0}' -f $_.Docs) $($_.What)" }) -join "`n"
+    $confirm = $found[0].Index
+    $text = "Delete the mission's indices on $($txtHost.Text.Trim())?`n`n$list`n`nThis cannot be undone - Kibana's dashboards stay, the data goes.`n`nType $confirm to confirm:"
+    if (-not (Read-TypedConfirmation 'Delete mission index' $text $confirm)) { Write-Log "Mission index not deleted (cancelled).`n" 'info'; return }
+    Set-AppBusy $true "deleting $(($found | ForEach-Object Index) -join ' and ')"
     try {
-        Invoke-EsJson -Uri "$base/$idx" -Method Delete -Headers $h -TimeoutSec 60 | Out-Null
-        $result = 'Success'; $detail = "$docs detection(s) deleted"
-        Write-Log "Mission index $idx deleted ($('{0:N0}' -f $docs) detection(s)).`n" 'ok'
-    } catch {
-        $detail = $_.Exception.Message
-        Write-Log "Could not delete ${idx}: $detail`n" 'err'
+        foreach ($f in $found) {
+            $result = 'FAILED'; $detail = ''
+            try {
+                Invoke-EsJson -Uri "$base/$($f.Index)" -Method Delete -Headers $h -TimeoutSec 60 | Out-Null
+                $result = 'Success'; $detail = "$($f.Docs) $($f.What) deleted"
+                Write-Log "Mission index $($f.Index) deleted ($('{0:N0}' -f $f.Docs) $($f.What)).`n" 'ok'
+            } catch {
+                $detail = $_.Exception.Message
+                Write-Log "Could not delete $($f.Index): $detail`n" 'err'
+            } finally {
+                Write-Ledger @(New-LedgerRow -Action 'Delete index' -Target $txtHost.Text.Trim() -Port (Get-UploadPort) -Protocol 'HTTPS' `
+                                  -Account (Get-EsAccountLabel $txtUser.Text) -Result $result -Output $f.Index -Details $detail)
+            }
+        }
     } finally {
-        Write-Ledger @(New-LedgerRow -Action 'Delete index' -Target $txtHost.Text.Trim() -Port (Get-UploadPort) -Protocol 'HTTPS' `
-                          -Account (Get-EsAccountLabel $txtUser.Text) -Result $result -Output $idx -Details $detail)
         Set-AppBusy $false
     }
 })
