@@ -1054,7 +1054,7 @@ function Get-FolderLayout([string]$Root, [string]$Evtx, [string]$Archive) {
     # The one place the tool's folders are named. What the operator supplies
     # goes under input\, each tool's processed results under output\<tool>\,
     # so the folder name says what goes where. evtx\ stays top level: it is the
-    # Collect tab's output AND the Convert tab's input. The Settings tab can
+    # Collect tab's output AND the Hayabusa tab's input. The Settings tab can
     # move the EVTX drop folder and the archive (local or \\server\share).
     [pscustomobject]@{
         Targets  = Join-Path $Root 'input\targets'
@@ -1078,16 +1078,65 @@ function Read-ToolSettings([string]$Path) {
                             PcapViewer = 'on'
                             # Notepad with the run log when a job ends (Stop-UiJob).
                             OpenRunLog = 'on'
-                            # The job queue's switches. Archive deletes
-                            # the original EVTX (after a verified zip) and raw events are
-                            # many times the detections' volume, so those two are the
-                            # operator's choice.
-                            AutoConvert = 'on'; AutoUpload = 'on'; AutoRaw = 'off'; AutoArchive = 'off' }
+                            # The job queue's switches: what each host sends
+                            # (Get-QueueSteps). Archive deletes the original EVTX
+                            # (after a verified zip) and raw events are many times
+                            # the detections' volume, so those two are the
+                            # operator's choice. AutoSend '' = not chosen yet.
+                            AutoSend = ''; AutoUpload = 'on'; AutoArchive = 'off' }
+    $c = $null
     try {
         $c = [IO.File]::ReadAllText($Path) | ConvertFrom-Json
         foreach ($p in $s.PSObject.Properties) { if ($c.($p.Name)) { $p.Value = [string]$c.($p.Name) } }
     } catch { }
+    if ($s.AutoSend -notin $script:QueueSendKinds) {
+        # A settings.conf from before v83 had two boxes instead of Send.
+        $conv = 'on'; $raw = 'off'
+        if ($c -and $c.AutoConvert) { $conv = [string]$c.AutoConvert }
+        if ($c -and $c.AutoRaw) { $raw = [string]$c.AutoRaw }
+        $s.AutoSend = ConvertTo-AutoSend $conv $raw
+        # v82 sent the raw events whatever Upload said, and greyed Upload out
+        # when the scan was off - raw events alone must still go out.
+        if ($s.AutoSend -eq 'raw') { $s.AutoUpload = 'on' }
+    }
     return $s
+}
+
+# The queue's Send: what each host's job makes (v83 - before it, two boxes,
+# and raw events only meant unticking the Hayabusa scan).
+$script:QueueSendKinds = @('det', 'both', 'raw', 'none')
+
+function ConvertTo-AutoSend([string]$Convert, [string]$Raw) {
+    # The v82 queue boxes "Hayabusa scan" (AutoConvert) and "Raw events"
+    # (AutoRaw) as one Send choice.
+    $c = $Convert -eq 'on'; $r = $Raw -eq 'on'
+    if ($c -and $r) { return 'both' }
+    if ($c) { return 'det' }
+    if ($r) { return 'raw' }
+    return 'none'
+}
+
+function Get-ConvertPlan([string]$Make, [bool]$FromEvtx) {
+    # The Hayabusa tab's "What to make": det | both | raw. Raw events only
+    # runs no rules scan at all. An existing Hayabusa JSONL holds only
+    # detections, so it is always 'det'.
+    if (-not $FromEvtx -or $Make -notin 'det', 'both', 'raw') { $Make = 'det' }
+    $hint = if (-not $FromEvtx) { 'An existing JSONL holds only detections - raw events need the EVTX folder (Scan an EVTX folder).' }
+            else {
+                switch ($Make) {
+                    'det'  { 'Writes results.ecs.jsonl - the Upload tab sends it to hayabusa-mission-(name).' }
+                    'both' { 'Writes results.ecs.jsonl and raw-ecs.jsonl - the Upload tab sends both, each to its own index.' }
+                    'raw'  { 'No rules scan. Writes raw-ecs.jsonl - the Upload tab sends it to hayabusa-raw-(name).' }
+                }
+            }
+    [pscustomobject]@{
+        Make   = $Make
+        Scan   = $FromEvtx -and $Make -ne 'raw'
+        Ecs    = $Make -ne 'raw'
+        Raw    = $FromEvtx -and $Make -ne 'det'
+        Button = if (-not $FromEvtx) { 'CONVERT' } elseif ($Make -eq 'raw') { 'EXPORT RAW EVENTS' } else { 'SCAN + CONVERT' }
+        Hint   = $hint
+    }
 }
 
 function Resolve-TypedPath([string]$Text, [string]$NetworkKey = 'HKCU:\Network') {
@@ -1432,7 +1481,7 @@ function New-HostRawUrl {
 # different Sigma rules emit different keys. Verified against all 32,386
 # sample detections.
 function Get-PathGuide {
-    # Drawn on the Convert tab, which is where the confusion is created: this
+    # Drawn on the Hayabusa tab, which is where the confusion is created: this
     # one step writes two files whose names differ by a few characters and
     # which feed opposite tabs. Aligned for a monospaced font.
     return @(
@@ -1642,7 +1691,7 @@ function Get-JsonlKind([string]$Path, [int]$SampleLines = 5) {
                   ($names -notcontains '@timestamp')
         if ($hasRaw) {
             return @{ Kind = 'RawHayabusa'
-                      Reason = 'This is raw Hayabusa output, not the converted ECS file. Convert it on the Convert tab first.' }
+                      Reason = 'This is raw Hayabusa output, not the converted ECS file. Convert it on the Hayabusa tab first.' }
         }
     }
 
@@ -4008,7 +4057,7 @@ function Start-EcsWorker {
 }
 
 function Convert-HayabusaJsonlToEcs {
-    # The one conversion. The Convert tab runs it with a progress callback;
+    # The one conversion. The Hayabusa tab runs it with a progress callback;
     # an operator runs it by hand from PowerShell when the GUI cannot be used
     # (see the Show command button and README.txt). One function, so the two
     # can never produce different documents.
@@ -4289,7 +4338,9 @@ function Get-ManualHayabusaCommand {
 }
 
 function Get-ManualEcsCommand {
-    param([string]$LibPath, [string]$Source, [string[]]$EvtxDir)
+    # -WithImportId: the run's one $importId, shared with the raw export's
+    # conversion - the Upload tab pairs the two files by it.
+    param([string]$LibPath, [string]$Source, [string[]]$EvtxDir, [switch]$WithImportId)
     $EvtxDir = @(@($EvtxDir) | Where-Object { $_ })
     $src = if ($Source) { $Source } else { '<results.jsonl>' }
     # Same naming as Get-EcsOutputPath, done as text: that one goes through
@@ -4298,13 +4349,43 @@ function Get-ManualEcsCommand {
            elseif ($src -match '\.jsonl?$') { $src -replace '\.jsonl?$', '.ecs.jsonl' }
            else { "$src.ecs.jsonl" }
     return (@(
-        '# Manual ECS conversion - the same function the Convert tab runs.'
+        '# Manual ECS conversion - the same function the Hayabusa tab runs.'
         '# Start PowerShell with:   powershell -ExecutionPolicy Bypass'
         ". $(ConvertTo-PsLiteral $LibPath)"
         # The version stamp (agent.version) - a fresh console has none.
         "`$script:ToolVersion = $(ConvertTo-PsLiteral "$script:ToolVersion")"
+        $(if ($WithImportId) { $script:ManualImportIdLine })
         ("Convert-HayabusaJsonlToEcs -Source $(ConvertTo-PsLiteral $src) -Destination $(ConvertTo-PsLiteral $dst)" +
-            $(if ($EvtxDir.Count) { " -EvtxDir " + ((@($EvtxDir) | ForEach-Object { ConvertTo-PsLiteral $_ }) -join ', ') } else { '' }))
+            $(if ($EvtxDir.Count) { " -EvtxDir " + ((@($EvtxDir) | ForEach-Object { ConvertTo-PsLiteral $_ }) -join ', ') } else { '' }) +
+            $(if ($WithImportId) { ' -ImportId $importId' } else { '' }))
+    ) -join "`r`n")
+}
+
+# The same id the window mints, made once by whichever pasted block runs first.
+$script:ManualImportIdLine = "if (-not `$importId) { `$importId = (Get-Date -Format 'yyyyMMddHHmmss') + [guid]::NewGuid().ToString('N').Substring(0, 8) }"
+
+function Get-ManualRawCommand {
+    # What EXPORT RAW EVENTS runs: Hayabusa's search export (no rules), then
+    # the same conversion into raw-ecs.jsonl for the Upload tab.
+    param([string]$Exe, [string[]]$EvtxDir, [string]$WorkDir, [string]$LibPath)
+    $exePath = if ($Exe) { $Exe } else { '<HAYABUSA EXE>' }
+    $EvtxDir = @(@($EvtxDir) | Where-Object { $_ })
+    if (-not $EvtxDir.Count) { $EvtxDir = @('<EVTX FOLDER>') }
+    $export = Join-Path $WorkDir 'raw.jsonl'
+    $a = Get-HayabusaRawExportArgs -EvtxDir $EvtxDir -OutFile $export
+    return (@(
+        '# Manual raw-event export - what EXPORT RAW EVENTS runs: every event, no rules.'
+        '# Hayabusa finds its config folder from the current folder, so run it from its own.'
+        "Set-Location $(ConvertTo-PsLiteral (Split-Path -Parent $exePath))"
+        "& $(ConvertTo-PsLiteral $exePath) " + ((@($a) | ForEach-Object { Format-PsArgument $_ }) -join ' ')
+        ''
+        '# Then into ECS as raw-ecs.jsonl, for the Upload tab.'
+        '# Start PowerShell with:   powershell -ExecutionPolicy Bypass'
+        ". $(ConvertTo-PsLiteral $LibPath)"
+        "`$script:ToolVersion = $(ConvertTo-PsLiteral "$script:ToolVersion")"
+        $script:ManualImportIdLine
+        ("Convert-HayabusaJsonlToEcs -Raw -Source $(ConvertTo-PsLiteral $export) -Destination $(ConvertTo-PsLiteral (Join-Path $WorkDir 'raw-ecs.jsonl'))" +
+            ' -ImportId $importId')
     ) -join "`r`n")
 }
 
@@ -5236,7 +5317,7 @@ function Get-GuideEntries {
         & $e 'Pivoting' $find 'Why does a detection not show the whole event?' (
             'Hayabusa sends only what a rule matched: the matched events, with the fields Hayabusa extracts ' +
             '(winlog.event_data.*, hayabusa.details). Every event no rule matched is in the raw events: the ' +
-            "Convert tab's 'Also export every raw event', or the queue's Raw events.")
+            "Hayabusa tab's What to make, or the queue's Send - Detections + raw events, or Raw events only.")
         & $e 'Where data lands' $find "Why are my detections not in Security Onion's Hunt or Alerts?" (
             'Detections go into their own index, hayabusa-mission-<mission name>, so they can be dropped cleanly. ' +
             "Hunt and Alerts search only Security Onion's own indices. Look in Kibana: Discover, or the Hayabusa " +
@@ -5267,9 +5348,9 @@ function Get-GuideEntries {
             'Amber means waiting for you, and the row says what for: the mission name, VERIFY CONNECTIVITY, ' +
             'a password, or the PCAP question. Fix that and the job carries on by itself.')
         & $e 'Queue and archive' 'THE QUEUE (AUTOMATIC PROCESSING)' 'How do I run 30+ machines?' (
-            'Settings: point the EVTX drop folder at the folder whose subfolders are the machines. Tick the steps ' +
+            'Settings: point the EVTX drop folder at the folder whose subfolders are the machines. Pick Send ' +
             'under QUEUE, then Add folders... and Select all. It runs one machine at a time, start to finish. For a ' +
-            'second pass (raw events only, say): change the ticks, Clear done, Add folders... again.')
+            'second pass (raw events only, say): change Send, Clear done, Add folders... again.')
         & $e 'Passwords and PCAP' 'REMEMBERED PASSWORDS' 'Why did EVTXER forget my password?' (
             'A password is kept only when Remember is ticked, after a check that worked - encrypted for your ' +
             'Windows account on this machine. Otherwise it lasts until EVTXER closes, and after a restart the ' +
@@ -5676,18 +5757,23 @@ $script:QueueStepText = @{
     ecs     = @{ Short = 'ECS';        Run = 'Converting to ECS';            Wait = 'Waiting to convert to ECS'; Colour = '#A98BD9' }
     upload  = @{ Short = 'upload';     Run = 'Uploading';                    Wait = 'Waiting to upload';         Colour = '#4FB8B0' }
     raw     = @{ Short = 'raw events'; Run = 'Sending raw events';           Wait = 'Waiting to send raw events'; Colour = '#8C93E6' }
+    rawfile = @{ Short = 'raw export'; Run = 'Exporting raw events';         Wait = 'Waiting to export raw events'; Colour = '#8C93E6' }
     archive = @{ Short = 'archive';    Run = 'Archiving';                    Wait = 'Waiting to archive';        Colour = '#C8A26B' }
 }
 $script:QueueColour = @{ waiting = '#E8B04A'; done = '#7EC87E'; failed = '#F2A0A0' }
 
 function Get-QueueSteps($Settings) {
-    # Upload needs the conversion's file, so it is only offered with it.
+    # Send (AutoSend) says what is made, Upload whether it goes out. Raw
+    # events with Upload off are exported and kept ('rawfile') for the
+    # Upload tab - never sent.
+    $send = [string]$Settings.AutoSend
+    $up = $Settings.AutoUpload -eq 'on'
     $s = @()
-    if ($Settings.AutoConvert -eq 'on') {
+    if ($send -in 'det', 'both') {
         $s += 'scan', 'ecs'
-        if ($Settings.AutoUpload -eq 'on') { $s += 'upload' }
+        if ($up) { $s += 'upload' }
     }
-    if ($Settings.AutoRaw -eq 'on')     { $s += 'raw' }
+    if ($send -in 'both', 'raw') { $s += $(if ($up) { 'raw' } else { 'rawfile' }) }
     if ($Settings.AutoArchive -eq 'on') { $s += 'archive' }
     return $s
 }
@@ -5896,11 +5982,16 @@ function Invoke-QueueStep {
                 if ($p.Outcome -ne 'Success') { throw "upload $($p.Outcome): $($p.Detail)" }
                 $r.Summary = "$($p.Detail) in '$($Context.Index)'"
             }
-            'raw' {
+            { $_ -in 'raw', 'rawfile' } {
                 # Every event of the host folder (Invoke-RawEventExport), then
-                # into hayabusa-raw-<mission> with the upload's own checks.
-                $row.Action = 'Raw upload'; $row.Protocol = 'Hayabusa search + HTTPS (Elasticsearch, job queue)'; $row.Output = $Context.RawIndex
-                $row.Target = $Context.EsHost; $row.Port = $Context.EsPort; $row.Account = $Context.EsUser
+                # ('raw') into hayabusa-raw-<mission> with the upload's own
+                # checks, or ('rawfile', Upload off) kept for the Upload tab.
+                if ($step -eq 'rawfile') {
+                    $row.Action = 'Raw export'; $row.Protocol = 'Hayabusa search (job queue)'
+                } else {
+                    $row.Action = 'Raw upload'; $row.Protocol = 'Hayabusa search + HTTPS (Elasticsearch, job queue)'; $row.Output = $Context.RawIndex
+                    $row.Target = $Context.EsHost; $row.Port = $Context.EsPort; $row.Account = $Context.EsUser
+                }
                 New-Item -ItemType Directory -Path $Job.OutDir -Force | Out-Null
                 $x = Invoke-RawEventExport -EvtxDir $Job.Folder -WorkDir $Job.OutDir -HayabusaExe $Context.HayabusaExe -ImportId $Job.ImportId `
                         -Run { param($p) Invoke-PumpedTool @p -Progress $qp -LogWriter $qlog -Low } -Log $qlog2 -OnProgress {
@@ -5911,6 +6002,13 @@ function Invoke-QueueStep {
                 # Every record unreadable is a failure, not "0 events" in green
                 # (an export layout change would otherwise pass for empty logs).
                 if ($x.Bad -and -not $x.Converted) { throw (Get-RawExportProblem $x) }
+                if ($step -eq 'rawfile') {
+                    if (-not $x.Converted) { $r.Summary = $x.Detail; $row.Files = '0 raw events'; break }
+                    if ($x.Bad) { $r.Warning = Get-RawExportProblem $x }
+                    $row.Output = $x.Path; $row.Files = "$($x.Converted) raw events"
+                    $r.Summary = "$('{0:N0}' -f $x.Converted) raw events kept in $($x.Path) - send them with the Upload tab"
+                    break
+                }
                 if ($x.Bad) { $r.Warning = "$(Get-RawExportProblem $x) - they are not in '$($Context.RawIndex)'" }
                 if (-not $x.Converted) { $r.Summary = $x.Detail; $row.Files = '0 raw events'; break }
                 $p = Publish-EcsFile -Base $Context.EsBase -Headers $Context.EsHeaders -Index $Context.RawIndex -Path $x.Path `

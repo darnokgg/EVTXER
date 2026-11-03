@@ -16,7 +16,7 @@
 # ------------------------------------------------------------ tab state -----
 # Upload-only state the WinForms launcher declared at the top of the file.
 # Guarded, because another tab's fragment may already have named the shared
-# ones (the Convert tab writes $script:EcsPath / $script:ImportId and then
+# ones (the Hayabusa tab writes $script:EcsPath / $script:ImportId and then
 # calls Update-SourceReadiness, which is defined here).
 if ($null -eq $script:ConfPath)  { $script:ConfPath  = Join-Path $script:AppRoot 'importer.conf' }
 if ($null -eq $script:Template)  { $script:Template  = Join-Path $script:AppRoot 'index-template.json' }
@@ -75,14 +75,14 @@ $uploadXaml = @'
                    VerticalAlignment="Top"/>
 
         <TextBlock Grid.Row="1" Grid.Column="0" Text="Source JSONL *" Margin="0,0,10,0"
-                   ToolTip="The converted file to send: the ecs.jsonl the Convert tab writes (it is filled in here by itself after a conversion). Not Hayabusa's own results.jsonl - that one is for the Takajo tab."/>
+                   ToolTip="The converted file to send: the ecs.jsonl the Hayabusa tab writes (it is filled in here by itself after a conversion). Not Hayabusa's own results.jsonl - that one is for the Takajo tab."/>
         <TextBox   Grid.Row="1" Grid.Column="1" x:Name="txtSource"/>
         <Button    Grid.Row="1" Grid.Column="2" x:Name="btnSourceBrowse"
                    Content="Browse..." Margin="8,0,0,0"/>
 
         <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" x:Name="lblSource"
                    Style="{DynamicResource Hint}" Margin="0,8,0,0"
-                   Text="Nothing loaded. Convert on the Convert tab, or Browse to an existing ecs.jsonl."/>
+                   Text="Nothing loaded. Scan on the Hayabusa tab, or Browse to an existing ecs.jsonl."/>
       </Grid>
     </Border>
 
@@ -248,7 +248,7 @@ $uploadXaml = @'
                     Content="Update detections already in the index"
                     ToolTip="Off (normal): a detection already in the index - same event, same rule - is skipped and counted as 'already in index'. On: it is replaced by this upload's copy. Only for re-uploading the same logs after an EVTXER update changed the conversion. Nothing is ever stored twice either way."/>
         </StackPanel>
-        <!-- Shown when a raw-ecs.jsonl (every event, Convert tab or job queue)
+        <!-- Shown when a raw-ecs.jsonl (every event, Hayabusa tab or job queue)
              sits beside the detections file: one click sends both. -->
         <CheckBox x:Name="chkRawToo" IsChecked="True" Margin="0,10,0,0" Visibility="Collapsed"
                   Content="Also send the raw events beside it (raw-ecs.jsonl) to hayabusa-raw-(mission)"
@@ -318,7 +318,7 @@ function Update-SourceReadiness {
     $script:RawPath = $null; $chkRawToo.Visibility = 'Collapsed'
     if (-not $path) {
         $script:SourceKind = 'Missing'
-        $lblSource.Text = 'Nothing loaded. Convert on the Convert tab, or Browse to an existing ecs.jsonl.'
+        $lblSource.Text = 'Nothing loaded. Scan on the Hayabusa tab, or Browse to an existing ecs.jsonl.'
         $lblSource.Foreground = $script:UpBrush.muted
         return
     }
@@ -787,7 +787,7 @@ function Start-RawOnlyUpload {
         $lblStatus.Text = "Raw upload: $(if ($ok) { 'Success' } else { 'FAILED' })"
         if ($ok) { Show-FindIt (Get-MissionIndexName $script:Settings.MissionName) $rawIdx (Get-JsonlImportId $script:RawPath) }
     } finally {
-        # Last - see the Convert tab's finally.
+        # Last - see the Hayabusa tab's finally.
         Set-AppBusy $false
     }
 }
@@ -932,7 +932,7 @@ $btnUpload.Add_Click({
                           -Protocol 'HTTPS (Elasticsearch)' -Account (Get-EsAccountLabel $txtUser.Text) -Result $uploadOutcome `
                           -Files "$('{0:N0}' -f $script:indexedCount) documents" -Output $txtIndex.Text.Trim() `
                           -Details ((@($uploadDetail, "source $($script:EcsPath)", "import.id $($script:ImportId)") | Where-Object { $_ }) -join '; '))
-        # Last - see the Convert tab's finally.
+        # Last - see the Hayabusa tab's finally.
         Set-AppBusy $false
     }
 })

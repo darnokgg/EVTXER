@@ -44,7 +44,7 @@ $script:AppRoot = Split-Path -Parent $script:ScriptPath
 $script:Root    = Split-Path -Parent $script:AppRoot
 if (-not $script:Root) { $script:Root = (Get-Location).Path }
 
-$script:ToolVersion = '82'
+$script:ToolVersion = '83'
 # The Settings tab can move the EVTX drop folder and the archive; both are
 # saved in code\settings.conf, beside importer.conf.
 $script:SettingsPath = Join-Path $script:AppRoot 'settings.conf'
@@ -596,7 +596,7 @@ $xaml = @'
         <!-- Short names fit one row (owner, 2026-10-26: two rows swapped places
              when a tab in the other row was clicked); the full name is the tooltip. -->
         <TabItem Header="Collect" ToolTip="Collect EVTX from remote hosts"><ScrollViewer x:Name="tabCollect" VerticalScrollBarVisibility="Auto"/></TabItem>
-        <TabItem Header="Convert" ToolTip="Convert: a Hayabusa scan, then ECS"><ScrollViewer x:Name="tabConvert" VerticalScrollBarVisibility="Auto"/></TabItem>
+        <TabItem Header="Hayabusa" ToolTip="Scan EVTX with Hayabusa, then convert the results to ECS for the upload"><ScrollViewer x:Name="tabConvert" VerticalScrollBarVisibility="Auto"/></TabItem>
         <TabItem Header="Upload" ToolTip="Upload to ELK (Elasticsearch)"><ScrollViewer x:Name="tabUpload" VerticalScrollBarVisibility="Auto"/></TabItem>
         <TabItem Header="Takajo" ToolTip="Takajo analysis and reports"><ScrollViewer x:Name="tabTakajo" VerticalScrollBarVisibility="Auto"/></TabItem>
         <TabItem Header="Dashboards" ToolTip="Kibana dashboards"><ScrollViewer x:Name="tabKibana" VerticalScrollBarVisibility="Auto"/></TabItem>

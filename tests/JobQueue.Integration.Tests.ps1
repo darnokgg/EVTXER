@@ -72,6 +72,19 @@ try {
         $job.Step++
     }
 
+    # ---- raw events kept (Send: raw events, Upload off - v83) ----
+    # Under output\, as RawEvents.Tests does: the samples are attack logs and
+    # Defender quarantines their export in %TEMP%.
+    $rawOut = Join-Path $PSScriptRoot "..\output\jobqueue_raw_$PID"
+    try {
+        $rj = New-QueueJob $hostDir @('rawfile') $rawOut
+        $r = Invoke-Step $rj $ctx
+        Assert-True $r.Ok "raw events with Upload off are exported ($($r.Summary))"
+        Assert-True (Test-Path -LiteralPath (Join-Path $rj.OutDir 'raw-ecs.jsonl')) "and kept for the Upload tab"
+        Assert-True ($r.Summary -match 'Upload tab') "the row says where they go next"
+        Assert-Equal $r.Ledger[0].Action 'Raw export' "with an activity-log row of their own"
+    } finally { Remove-Item -LiteralPath $rawOut -Recurse -Force -ErrorAction SilentlyContinue }
+
     # ---- archive ----
     $r = Invoke-Step $job $ctx
     Assert-True $r.Ok "the archive step zips the host folder ($($r.Summary))"

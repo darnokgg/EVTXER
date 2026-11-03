@@ -64,9 +64,10 @@ THE SEVEN TABS
                             (plain, or over HTTPS).
                             Lands in evtx\<hostname>_<timestamp>\
 
-2. Convert                  Scan those logs with Hayabusa. Writes two files -
-                            see below - and, ticked by default, every raw
-                            event as well (raw-ecs.jsonl). + beside Browse
+2. Hayabusa                 Scan those logs with Hayabusa. What to make:
+                            Detections, Detections + raw events (the
+                            default), or Raw events only (every event, no
+                            rules scan - EXPORT RAW EVENTS). + beside Browse
                             adds more EVTX folders (Ctrl-click several); all
                             are scanned together into one result, - takes
                             one away.
@@ -145,7 +146,7 @@ WHERE THE FILES GO
                                tab, one host per line (.txt)
 
     evtx\<host>_<timestamp>\   collected logs, or drop your own EVTX here.
-                               Collect writes here, Convert reads from here.
+                               Collect writes here, Hayabusa scans from here.
                                The Settings tab can move this folder.
 
     pcap\                      your accountability captures (Settings tab)
@@ -395,7 +396,7 @@ into PowerShell. For the collection, open it with "Run as administrator".
 
 3. Convert for the upload (results.jsonl -> results.ecs.jsonl):
 
-    # Manual ECS conversion - the same function the Convert tab runs.
+    # Manual ECS conversion - the same function the Hayabusa tab runs.
     # Start PowerShell with:   powershell -ExecutionPolicy Bypass
     . 'C:\EVTXER\code\HayabusaLib.ps1'
     $script:ToolVersion = 'NN'   # NN = the number in EVTXER's title bar - stamps agent.version
@@ -585,12 +586,20 @@ open), and the rest runs by itself, one host at a time:
     scan with Hayabusa -> convert to ECS -> upload to the mission index
     -> raw events to the mission's raw index -> archive
 
-Which of those steps run is ticked on the queue pane itself, "Runs by
-itself:" (Convert, Upload, Raw events, Archive when done).
-Out of the box: convert and upload ON; raw events and archive OFF (archive
-deletes the original EVTX after a verified zip, and raw events are many
-times the detections' volume - both are your call). A change applies to
-hosts queued from then on.
+What runs is chosen on the queue pane itself, "Runs by itself:":
+
+    Send      Detections               the Hayabusa rules scan, then ECS
+              Detections + raw events  that, plus every event of the host
+              Raw events only          every event, NO rules scan
+              Nothing (archive only)
+    Upload    send what Send makes to the stack; unticked, the files are
+              kept on this PC for the Upload tab
+    Archive when done
+
+Out of the box: Detections, Upload on, Archive off (archive deletes the
+original EVTX after a verified zip, and raw events are many times the
+detections' volume - both are your call). A change applies to hosts queued
+from then on.
 
 The colour of a row is the step it is on or waiting for:
 
@@ -624,7 +633,8 @@ selected job's steps printed), Hide.
 
 Each job writes its own results, never anyone else's:
 output\hayabusa\jobs\<host folder>\results.jsonl, results.ecs.jsonl and
-results-summary.html. Every step is a row in the activity log.
+results-summary.html (and raw-ecs.jsonl when raw events are kept, Upload
+off). Every step is a row in the activity log.
 
 The queue is saved (logs\queue.json) and survives a restart or a crash.
 Closing EVTXER while a job runs asks first; the step stops, and the job starts
@@ -640,11 +650,10 @@ folder are not offered). Then Add folders..., Select all, QUEUE THEM. EVTX
 in more than one place: in the same window, "From another folder..." adds
 machine folders from anywhere else - pick machine folders (Ctrl-click for
 several at once), or folders that each hold several - without changing the
-drop folder; press it again for another location. With
-Convert and Upload ticked, every host is scanned, converted and uploaded to
-the mission index (Security Onion's Elasticsearch) by itself; tick Raw events
-as well to send every raw event too. The Convert tab never uploads by
-itself - after it, press UPLOAD on the Upload tab.
+drop folder; press it again for another location. Every host is then done
+by itself as Send and Upload say - with Raw events only and Upload, each
+host's every event goes straight into the raw index. The Hayabusa tab never
+uploads by itself - after it, press UPLOAD on the Upload tab.
 
 Adding more hosts later: same mission name, Add folders... again. They go
 into the same index; detections already there are skipped, never doubled.
@@ -809,8 +818,8 @@ ACTIVITY LOG
 logs\activity_log.csv - one row per thing the tool did, across every
 session, never rewritten: date, time (local and UTC), your Windows account,
 this machine and its IP, the action (Port test, Verify access, Collect,
-Convert, Verify connection, Upload, SO import, EVTX archive), the target,
-port and protocol, the account used on the target (never a password), the
+Convert, Raw export, Verify connection, Upload, Raw upload, EVTX archive),
+the target, port and protocol, the account used on the target (never a password), the
 result, files, size, duration, the hash verdict, anything left on the
 target, the output folder, zip or index, and the tool version.
 
@@ -865,11 +874,11 @@ a plain Elastic stack alike - nothing else to set up.
     event's fields (error-report parameters, binary blobs) is left out. The
     same names as the detections (host.name, user.name, source.ip,
     process.command_line, winlog.event_data.* ...), so one query finds both.
-  - WHERE IT RUNS: the Convert tab's "Also export every raw event" (ticked
-    by default) writes raw-ecs.jsonl beside the detections; the Upload tab
-    then sends both ("Also send the raw events beside it"). Browse to a
-    raw-ecs.jsonl alone and UPLOAD sends just that. In the queue, tick Raw
-    events.
+  - WHERE IT RUNS: the Hayabusa tab's What to make - Detections + raw
+    events (the default) writes raw-ecs.jsonl beside the detections, Raw
+    events only writes it alone with no rules scan; the Upload tab then
+    sends what is there ("Also send the raw events beside it"). Browse to a
+    raw-ecs.jsonl alone and UPLOAD sends just that. In the queue: Send.
   - TIME: @timestamp is when the event happened, as for detections.
   - NOTHING DOUBLES: every raw event has a fixed id (the machine, the log,
     the record number, the event id and its time); one already in the index
@@ -976,7 +985,7 @@ Where each kind of data goes:
       dashboards. NOT in Security Onion's Hunt or Alerts - those search
       Security Onion's own indices, and a separate index can be dropped
       cleanly. Same on a plain Elastic stack.
-  Raw events (Upload tab, queue's Raw events)
+  Raw events (Upload tab, or the queue's Send)
       Into the mission's raw index, hayabusa-raw-<mission name>. Seen in
       KIBANA: Discover (data view "Raw Windows events (EVTXER)"), the Raw
       Events dashboards and Mission timeline. Not in Security Onion's Hunt
@@ -1227,8 +1236,8 @@ SETUP 1 - Security Onion, 30 machines, hands off.
      (or an API key), Fetch the fingerprint, VERIFY CONNECTIVITY. Tick
      Remember. The ELK pill turns green.
   3. Dashboards tab: import the dashboards (once per stack).
-  4. Queue: tick Convert, Upload and Raw events (and Archive when done if
-     the drop folder is not your only copy).
+  4. Queue: Send "Detections + raw events", Upload ticked (and Archive when
+     done if the drop folder is not your only copy).
   5. Collect the machines. Each one is scanned, converted, its detections
      and raw events sent, one machine at a time. Watch the queue rows.
   6. Kibana: "Mission timeline", then the PEAK and Anomaly dashboards.
@@ -1241,15 +1250,24 @@ SETUP 2 - a plain Elastic stack (8.7 or 9).
      there the same way.
 
 SETUP 3 - one folder of EVTX, by hand.
-  1. Convert tab: Browse to the folder, leave "Also export every raw event"
-     ticked, SCAN + CONVERT.
+  1. Hayabusa tab: Browse to the folder, leave What to make on "Detections
+     + raw events", SCAN + CONVERT. (Raw events only: EXPORT RAW EVENTS.)
   2. Upload tab: the file is already filled in; "Also send the raw events
      beside it" is ticked. UPLOAD TO ELK. Read the Find-it lines under the
      result.
 
 SETUP 4 - no stack at all (a laptop in the field).
-  Convert tab, then the Takajo tab: CSV, or the HTML report opened from
+  Hayabusa tab, then the Takajo tab: CSV, or the HTML report opened from
   disk. Upload later from the same results folder.
+
+SETUP 5 - only the raw events, from a share (no rules scan).
+  1. Settings: name the mission. Upload tab: VERIFY CONNECTIVITY.
+  2. Queue: Send "Raw events only", Upload ticked, Archive when done OFF
+     (it would delete the EVTX on the share after zipping them).
+  3. Add folders..., From another folder..., type \\server\share\... in the
+     address bar, pick the machine folders (Ctrl-click), QUEUE THEM.
+  The share is only read; the export is written on this PC - keep about
+  1.5x the EVTX free there (see SIZE under EVERY RAW EVENT).
 
 WHAT HAPPENS IF ...
 

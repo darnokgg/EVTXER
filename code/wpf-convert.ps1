@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Convert (Hayabusa) tab - WPF fragment, dot-sourced by HayabusaWpf.ps1.
+    Hayabusa tab (called Convert until v83, hence the file name) - WPF fragment, dot-sourced by HayabusaWpf.ps1.
 
 .DESCRIPTION
     A fragment, not a script: it creates no Window, loads no assemblies and
@@ -36,7 +36,7 @@ $convertXaml = @'
              and WPF only auto-groups radios that share a parent. -->
         <RadioButton x:Name="rbEvtx" GroupName="convertMode" IsChecked="True"
                      Content="Scan an EVTX folder  (this tool runs Hayabusa with the correct flags)"
-                     ToolTip="Hayabusa reads every .evtx under the folder (subfolders too) and keeps the events a rule matches; then they are converted to ECS for the Upload tab. Collected hosts are done by the QUEUE below - this is for EVTX from anywhere else."/>
+                     ToolTip="Hayabusa reads every .evtx under the folder (subfolders too). What to make, below, says what comes out: the events a rule matches, every event, or both - converted to ECS for the Upload tab. Collected hosts are done by the QUEUE below - this is for EVTX from anywhere else."/>
 
         <Grid Margin="20,6,0,0">
           <Grid.ColumnDefinitions>
@@ -101,7 +101,19 @@ $convertXaml = @'
          and the guide's right-hand column was cut off. -->
     <Border Style="{DynamicResource CardPanel}">
       <StackPanel>
-        <TextBlock Text="Convert" Style="{StaticResource SectionHead}"/>
+        <TextBlock Text="What to make" Style="{StaticResource SectionHead}"/>
+        <!-- One choice instead of a raw-events box under the scan (v83, owner:
+             raw events "convoluted and not intuitive"). Get-ConvertPlan says
+             what each one runs; Raw events only runs no rules scan. -->
+        <WrapPanel Margin="0,0,0,4">
+          <RadioButton x:Name="rbMakeDet" GroupName="makeKind" Content="Detections" VerticalAlignment="Center" Margin="0,0,22,6"
+                       ToolTip="Hayabusa's rules only: the events a rule matched, converted to ECS (results.ecs.jsonl) for the mission index. Small and quick to search."/>
+          <RadioButton x:Name="rbMakeBoth" GroupName="makeKind" IsChecked="True" Content="Detections + raw events" VerticalAlignment="Center" Margin="0,0,22,6"
+                       ToolTip="The detections, plus every event of the scanned logs with the fields an investigation uses (raw-ecs.jsonl, for hayabusa-raw-(mission)). The Upload tab sends both. Adds about a third to the scan time."/>
+          <RadioButton x:Name="rbMakeRaw" GroupName="makeKind" Content="Raw events only" VerticalAlignment="Center" Margin="0,0,22,6"
+                       ToolTip="Every event of the scanned logs and NO rules scan: raw-ecs.jsonl only, for hayabusa-raw-(mission). For hunting in Kibana when the detections are not wanted."/>
+        </WrapPanel>
+        <TextBlock x:Name="lblMake" Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,0,0,12"/>
         <Grid>
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="Auto"/>
@@ -117,10 +129,7 @@ $convertXaml = @'
         </Grid>
         <CheckBox x:Name="chkCsv" Margin="0,12,0,0" IsChecked="False"
                   Content="Also write CSV (local analyst copy; upload still uses JSONL)"
-                  ToolTip="Runs Hayabusa a second time to write results.csv beside the JSONL, to open in Excel or Timeline Explorer. Doubles the scan time; nothing else uses the CSV."/>
-        <CheckBox x:Name="chkRaw" Margin="0,8,0,0" IsChecked="True"
-                  Content="Also export every raw event (raw-ecs.jsonl, for hayabusa-raw-(mission))"
-                  ToolTip="Hayabusa only outputs the events a rule matched. This also exports every event of the scanned logs, with the fields an investigation uses, beside the detections; the Upload tab then sends both. Adds about a third to the scan time."/>
+                  ToolTip="Runs Hayabusa a second time to write results.csv beside the JSONL, to open in Excel or Timeline Explorer. Doubles the scan time; nothing else uses the CSV. Not with Raw events only - it is a rules result."/>
       </StackPanel>
     </Border>
     <Border Style="{DynamicResource CardPanel}">
@@ -150,7 +159,8 @@ $tabConvert.Content = $convertRoot
 # is not in the window's name scope, so $win.FindName() returns $null for all of
 # these.
 foreach ($name in @('txtEvtx','txtExe','txtSrc','btnEvtx','btnExe','btnBrowse','btnAddEvtx','pnlMoreEvtx',
-                    'btnConvert','btnConvertCmd','chkCsv','chkRaw','rbEvtx','rbJsonl',
+                    'btnConvert','btnConvertCmd','chkCsv','rbEvtx','rbJsonl',
+                    'rbMakeDet','rbMakeBoth','rbMakeRaw','lblMake',
                     'lblExe','lblFile','lblConv','lblPaths')) {
     Set-Variable -Name $name -Scope Script -Value $convertRoot.FindName($name)
 }
@@ -222,12 +232,23 @@ $btnBrowse.Add_Click({
     }
 })
 
+function Get-MakeChoice {
+    if ($rbMakeRaw.IsChecked -eq $true) { return 'raw' }
+    if ($rbMakeDet.IsChecked -eq $true) { return 'det' }
+    return 'both'
+}
+
 function Update-Mode {
     # IsChecked is nullable<bool> in WPF, so it is compared rather than trusted.
     $evtx = ($rbEvtx.IsChecked -eq $true)
     foreach ($c in @($txtEvtx, $btnEvtx, $btnAddEvtx, $pnlMoreEvtx, $txtExe, $btnExe)) { $c.IsEnabled = $evtx }
     foreach ($c in @($txtSrc, $btnBrowse))                   { $c.IsEnabled = -not $evtx }
-    $btnConvert.Content = if ($evtx) { 'SCAN + CONVERT' } else { 'CONVERT' }
+    # A JSONL holds only detections: the raw choices wait for an EVTX folder.
+    $rbMakeBoth.IsEnabled = $evtx; $rbMakeRaw.IsEnabled = $evtx
+    $plan = Get-ConvertPlan -Make (Get-MakeChoice) -FromEvtx $evtx
+    $btnConvert.Content = $plan.Button
+    $chkCsv.IsEnabled = $plan.Scan
+    $lblMake.Text = $plan.Hint
     if ($evtx) { Update-ExeState } else { $lblExe.Text = '' }
 }
 
@@ -326,6 +347,7 @@ function Invoke-HayabusaScan {
 # Unchecked, so both are wired to keep the same "any change re-evaluates" rule.
 $rbEvtx.Add_Checked({ Update-Mode })
 $rbEvtx.Add_Unchecked({ Update-Mode })
+foreach ($rb in @($rbMakeDet, $rbMakeBoth, $rbMakeRaw)) { $rb.Add_Checked({ Update-Mode }) }
 $txtExe.Add_TextChanged({ if ($rbEvtx.IsChecked -eq $true) { Update-ExeState } })
 
 $btnExe.Add_Click({
@@ -335,7 +357,7 @@ $btnExe.Add_Click({
     if ($d.ShowDialog() -eq $true) { $txtExe.Text = $d.FileName }
 })
 
-# Point the Convert tab at a folder of EVTX: counts what is in it, says so, and
+# Point the Hayabusa tab at a folder of EVTX: counts what is in it, says so, and
 # drops any ECS path left over from a previous conversion. Called by the Browse
 # button and by the Collect tab when a collection finishes, so a freshly pulled
 # set of logs never has to be located by hand.
@@ -350,7 +372,7 @@ function Set-EvtxFolder([string]$Path, [switch]$Quiet) {
     } else {
         $lblConv.Text = 'No .evtx files found under this folder.'; $lblConv.Foreground = $script:ConvBrush.Err
     }
-    if (-not $Quiet) { Write-Log "Convert tab source set to $Path ($n .evtx file(s)).`n" 'info' }
+    if (-not $Quiet) { Write-Log "Hayabusa tab source set to $Path ($n .evtx file(s)).`n" 'info' }
     return $n
 }
 
@@ -447,9 +469,11 @@ $btnConvert.Add_Click({
     # Read once: the radios are locked while busy, but the record should not
     # depend on that.
     $fromEvtx = ($rbEvtx.IsChecked -eq $true)
+    $plan = Get-ConvertPlan -Make (Get-MakeChoice) -FromEvtx $fromEvtx
     $convTarget = if ($fromEvtx) { $evtxDirs -join '; ' } else { $txtSrc.Text.Trim() }
-    Set-AppBusy $true $(if ($fromEvtx) { 'Hayabusa scan + convert' } else { 'ECS convert' })
-    Start-UiJob $(if ($fromEvtx) { 'Hayabusa scan and convert' } else { 'ECS convert' })
+    $convWhat = if (-not $fromEvtx) { 'ECS convert' } elseif (-not $plan.Scan) { 'Raw event export' } else { 'Hayabusa scan + convert' }
+    Set-AppBusy $true $convWhat
+    Start-UiJob $convWhat
     $convClock = [Diagnostics.Stopwatch]::StartNew()
     $convResult = 'FAILED'; $convDetail = ''; $convDocs = ''; $convOut = ''
     # This run's own id. $script:ImportId still holds the previous run's until
@@ -460,30 +484,41 @@ $btnConvert.Add_Click({
             # The raw events of an earlier run must never be offered beside
             # this one's detections (review, v81).
             Remove-Item -LiteralPath (Join-Path (Split-Path -Parent (Get-ScanOutputPath $script:Root)) 'raw-ecs.jsonl') -Force -ErrorAction SilentlyContinue
-            $scanned = Invoke-HayabusaScan
-            if (-not $scanned) {
-                if ($script:CancelRequested) { $convResult = 'Cancelled' }
-                elseif ($script:ScanNoDetections -and $chkRaw.IsChecked -eq $true) {
+            $rawOnly = -not $plan.Scan
+            if ($plan.Scan) {
+                $scanned = Invoke-HayabusaScan
+                if (-not $scanned) {
+                    if ($script:CancelRequested) { $convResult = 'Cancelled'; return }
                     # No detections is no reason to skip the raw events - a
                     # clean machine is exactly where they matter.
-                    $script:ImportId = (Get-Date -Format 'yyyyMMddHHmmss') + [guid]::NewGuid().ToString('N').Substring(0,8)
-                    $convImportId = $script:ImportId
-                    $raw = Invoke-ConvertRawEvents $evtxDirs (Split-Path -Parent (Get-ScanOutputPath $script:Root)) $script:ImportId
-                    $rawProblem = Get-RawExportProblem $raw
-                    $convDetail = "no detections; raw events: $(if ($rawProblem) { $rawProblem } else { $raw.Detail })"
-                    if (-not $rawProblem -and $raw.Converted) {
-                        $convResult = 'Success'; $convOut = $raw.Path; $convDocs = "$('{0:N0}' -f $raw.Converted) raw events"
-                        if ($script:txtSource) { $script:txtSource.Text = $raw.Path }
-                        if (Get-Command Update-SourceReadiness -ErrorAction SilentlyContinue) { Update-SourceReadiness }
-                        $lblConv.Text = "No detections. $('{0:N0}' -f $raw.Converted) raw events exported - ready to upload."
-                        $lblConv.Foreground = $script:ConvBrush.Ok
-                    } else {
-                        if ($raw.Cancelled) { $convResult = 'Cancelled' }
-                        $lblConv.Text = "No detections. Raw events: $(if ($rawProblem) { $rawProblem } else { 'none in these logs' })."
-                        $lblConv.Foreground = $script:ConvBrush.Caution
-                    }
+                    if (-not ($script:ScanNoDetections -and $plan.Raw)) { $convDetail = 'Hayabusa scan did not complete'; return }
+                    $rawOnly = $true
                 }
-                else { $convDetail = 'Hayabusa scan did not complete' }
+            }
+            if ($rawOnly) {
+                # Raw events only (no rules scan at all), or a scan that found
+                # no detections: every event, straight to the Upload tab.
+                $why = if ($plan.Scan) { 'No detections. ' } else { '' }
+                $script:EcsPath = $null
+                $script:ImportId = (Get-Date -Format 'yyyyMMddHHmmss') + [guid]::NewGuid().ToString('N').Substring(0,8)
+                $convImportId = $script:ImportId
+                $raw = Invoke-ConvertRawEvents $evtxDirs (Split-Path -Parent (Get-ScanOutputPath $script:Root)) $script:ImportId
+                $rawProblem = Get-RawExportProblem $raw
+                $convDetail = "$(if ($plan.Scan) { 'no detections' } else { 'raw events only, no rules scan' }); raw events: $(if ($rawProblem) { $rawProblem } else { $raw.Detail })"
+                if ($raw.Ok -and $raw.Converted -and -not $raw.Cancelled) {
+                    # A few unreadable records do not hold back the rest - the
+                    # queue's raw step treats them the same way.
+                    $convResult = if ($rawProblem) { 'Raw events incomplete' } else { 'Success' }
+                    $convOut = $raw.Path; $convDocs = "$('{0:N0}' -f $raw.Converted) raw events"
+                    if ($script:txtSource) { $script:txtSource.Text = $raw.Path }
+                    if (Get-Command Update-SourceReadiness -ErrorAction SilentlyContinue) { Update-SourceReadiness }
+                    $lblConv.Text = "$why$('{0:N0}' -f $raw.Converted) raw events exported - ready to upload.$(if ($rawProblem) { " $rawProblem." })"
+                    $lblConv.Foreground = if ($rawProblem) { $script:ConvBrush.Caution } else { $script:ConvBrush.Ok }
+                } else {
+                    if ($raw.Cancelled) { $convResult = 'Cancelled' }
+                    $lblConv.Text = "${why}Raw events: $(if ($rawProblem) { $rawProblem } else { 'none in these logs' })."
+                    $lblConv.Foreground = $script:ConvBrush.Caution
+                }
                 return
             }
             $txtSrc.Text = $scanned
@@ -494,7 +529,7 @@ $btnConvert.Add_Click({
             if ($script:RunLog) { try { $cov = Get-HayabusaCoverage ([IO.File]::ReadAllText($script:RunLog)) } catch { } }
             if ($cov) {
                 $convDetail = $cov.Text
-                Write-Log "COVERAGE: $($cov.Text). Only events that match a rule are detections; every event is in the raw events ('Also export every raw event').`n" 'info'
+                Write-Log "COVERAGE: $($cov.Text). Only events that match a rule are detections; every event is in the raw events (What to make: Detections + raw events).`n" 'info'
             }
         }
         $script:ImportId = (Get-Date -Format 'yyyyMMddHHmmss') + [guid]::NewGuid().ToString('N').Substring(0,8)
@@ -541,7 +576,7 @@ $btnConvert.Add_Click({
         # Every event too, beside the detections - also when some detection
         # lines were unreadable: the raw events do not depend on them.
         $rawProblem = ''
-        if ($fromEvtx -and $chkRaw.IsChecked -eq $true) {
+        if ($plan.Raw) {
             $raw = Invoke-ConvertRawEvents $evtxDirs (Split-Path -Parent $out) $script:ImportId
             $rawProblem = Get-RawExportProblem $raw
             if ($rawProblem) { Write-Log "RAW EVENTS: $rawProblem - the detections are converted.`n" $(if ($raw.Cancelled) { 'warn' } else { 'err' }) }
@@ -576,7 +611,9 @@ $btnConvert.Add_Click({
         $convDetail = (@($convDetail, $_.Exception.Message) | Where-Object { $_ }) -join '; '
     } finally {
         Stop-UiJob
-        Write-Ledger @(New-LedgerRow -Action 'Convert' -Target $convTarget -Protocol $(if ($fromEvtx) { 'Hayabusa scan + ECS' } else { 'ECS' }) `
+        $convAction = 'Convert'; $convProto = if ($fromEvtx) { 'Hayabusa scan + ECS' } else { 'ECS' }
+        if ($fromEvtx -and -not $plan.Scan) { $convAction = 'Raw export'; $convProto = 'Hayabusa search' }
+        Write-Ledger @(New-LedgerRow -Action $convAction -Target $convTarget -Protocol $convProto `
                           -Result $convResult -Files $convDocs -Seconds $convClock.Elapsed.TotalSeconds -Output $convOut `
                           -Details ((@($convDetail, $(if ($convImportId) { "import.id $convImportId" })) | Where-Object { $_ }) -join '; '))
         # Last: it re-enables every tab, and anything after it that pumps the
@@ -589,14 +626,18 @@ $btnConvert.Add_Click({
 $btnConvertCmd.Add_Click({
     $out  = Get-ScanOutputPath $script:Root
     $dirs = @(Get-ConvertEvtxFolders)
+    $plan = Get-ConvertPlan -Make (Get-MakeChoice) -FromEvtx ($rbEvtx.IsChecked -eq $true)
     $scan = Get-ManualHayabusaCommand -Exe $txtExe.Text.Trim() -EvtxDir $dirs -OutFile $out `
                 -HtmlReport (Join-Path (Split-Path -Parent $out) 'results-summary.html') -Csv:($chkCsv.IsChecked -eq $true)
     $src  = if ($rbJsonl.IsChecked -eq $true -and $txtSrc.Text.Trim()) { $txtSrc.Text.Trim() } else { $out }
     $ecs  = Get-ManualEcsCommand -LibPath (Join-Path $script:AppRoot 'HayabusaLib.ps1') -Source $src `
-                -EvtxDir $(if ($rbEvtx.IsChecked -eq $true -and $dirs.Count) { $dirs } else { $script:Folders.Evtx })
-    $text = if ($rbEvtx.IsChecked -eq $true) { "$scan`r`n`r`n$ecs" } else { $ecs }
+                -EvtxDir $(if ($rbEvtx.IsChecked -eq $true -and $dirs.Count) { $dirs } else { $script:Folders.Evtx }) `
+                -WithImportId:$plan.Raw
+    $raw  = Get-ManualRawCommand -Exe $txtExe.Text.Trim() -EvtxDir $dirs -WorkDir (Split-Path -Parent $out) `
+                -LibPath (Join-Path $script:AppRoot 'HayabusaLib.ps1')
+    $text = (@($(if ($plan.Scan) { $scan }), $(if ($plan.Ecs) { $ecs }), $(if ($plan.Raw) { $raw })) | Where-Object { $_ }) -join "`r`n`r`n"
     Show-CommandWindow 'Manual scan and conversion' `
-        'What SCAN + CONVERT does, as PowerShell: the Hayabusa scan, then the ECS conversion the Upload tab needs.' $text
+        "What $($plan.Button) does, as PowerShell: the files the Upload tab needs." $text
 })
 
 # ---- initial state (the launcher did this at the bottom of the file) ----

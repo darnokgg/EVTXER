@@ -6,7 +6,7 @@
     Where the tool keeps the operator's evidence, and the Archive that moves
     it out once it has been processed.
 
-    - EVTX drop folder: what Collect fills and Convert / Raw Events read.
+    - EVTX drop folder: what Collect fills and the Hayabusa tab / queue read.
       Every tab reads $script:Folders.Evtx when it runs, so a change applies at
       once; the two boxes that were pre-filled with the old folder follow it.
     - Archive folder: local, or \\server\share. No credentials are stored: if
@@ -196,7 +196,7 @@ $setXaml = @'
         <Button    Grid.Row="1" Grid.Column="2" x:Name="btnSetEvtx" Content="Browse..." Margin="8,0,0,0"/>
         <Button    Grid.Row="1" Grid.Column="3" x:Name="btnSetEvtxDefault" Content="Default" Margin="8,0,0,0"/>
         <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" Style="{DynamicResource Hint}" Margin="0,8,0,0"
-                   Text="The Collect tab writes one folder per host here; Convert and Raw Events read from here. A change applies at once and is remembered."/>
+                   Text="The Collect tab writes one folder per host here; the Hayabusa tab and the queue read from here. A change applies at once and is remembered."/>
       </Grid>
     </Border>
 
@@ -313,7 +313,7 @@ function Select-SettingsFolder([string]$Description, [string]$Current) {
 
 # ============================================================ handlers =======
 $btnSetEvtx.Add_Click({
-    $p = Select-SettingsFolder 'EVTX drop folder: Collect writes here, Convert and Raw Events read from here' $script:Folders.Evtx
+    $p = Select-SettingsFolder 'EVTX drop folder: Collect writes here, the Hayabusa tab and the queue read from here' $script:Folders.Evtx
     if ($p) { Set-EvtxDropFolder $p }
 })
 $btnSetEvtxDefault.Add_Click({ Set-EvtxDropFolder (Get-FolderLayout $script:Root).Evtx })

@@ -40,12 +40,18 @@ $queueXaml = @'
          are in the tooltips. -->
     <WrapPanel Margin="0,6,0,0">
       <TextBlock Text="Runs by itself:" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="0,0,10,0"/>
-      <CheckBox x:Name="chkAutoConvert" Tag="AutoConvert" Content="Convert" VerticalAlignment="Center"
-                ToolTip="A Hayabusa scan of each collected host folder, then ECS."/>
+      <!-- One Send choice instead of a Hayabusa scan box and a Raw events
+           box (v83): raw events only no longer means unticking the scan. -->
+      <TextBlock Text="Send" VerticalAlignment="Center" Margin="0,0,8,0"
+                 ToolTip="What each host's job makes. Detections: the Hayabusa rules scan, then ECS, for the mission index. Raw events: every event of the host, no rules, for hayabusa-raw-(mission). Raw events only runs no rules scan. Nothing: only Archive when done runs."/>
+      <ComboBox x:Name="cboAutoSend" Width="210" VerticalAlignment="Center">
+        <ComboBoxItem Tag="det" Content="Detections"/>
+        <ComboBoxItem Tag="both" Content="Detections + raw events"/>
+        <ComboBoxItem Tag="raw" Content="Raw events only"/>
+        <ComboBoxItem Tag="none" Content="Nothing (archive only)"/>
+      </ComboBox>
       <CheckBox x:Name="chkAutoUpload" Tag="AutoUpload" Content="Upload" Margin="14,0,0,0" VerticalAlignment="Center"
-                ToolTip="To the mission index. Needs Convert, the mission name (Settings tab) and VERIFY CONNECTIVITY (Upload tab) - the Mission and ELK pills at the top turn green."/>
-      <CheckBox x:Name="chkAutoRaw" Tag="AutoRaw" Content="Raw events" Margin="14,0,0,0" VerticalAlignment="Center"
-                ToolTip="Every event of each host, not only the detections, into hayabusa-raw-(mission) over the Upload tab's connection. Needs the mission name (Settings tab) and VERIFY CONNECTIVITY (Upload tab), as Upload does."/>
+                ToolTip="Send what Send makes to the stack: detections to the mission index, raw events to hayabusa-raw-(mission). Unticked, the files are kept on this PC for the Upload tab. Needs the mission name (Settings tab) and VERIFY CONNECTIVITY (Upload tab) - the Mission and ELK pills at the top turn green."/>
       <CheckBox x:Name="chkAutoArchive" Tag="AutoArchive" Content="Archive when done" Margin="14,0,0,0" VerticalAlignment="Center"
                 ToolTip="A verified zip into the archive folder (Settings tab), then the host folder's EVTX are deleted."/>
     </WrapPanel>
@@ -127,26 +133,35 @@ $queueRoot = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeRea
 $queueHost.Content = $queueRoot
 foreach ($qName in @('lblQueue','btnQUp','btnQDown','btnQNext','btnQRetry','btnQCancel','btnQRemove','btnQClear',
                      'btnQAdd','btnQLog','btnQHide','pnlQueueList','lstQueue',
-                     'chkAutoConvert','chkAutoUpload','chkAutoRaw','chkAutoArchive')) {
+                     'cboAutoSend','chkAutoUpload','chkAutoArchive')) {
     Set-Variable -Name $qName -Scope Script -Value $queueRoot.FindName($qName)
 }
-# One handler for the four switches: each box's Tag is its setting's name.
-# A change applies to jobs queued from then on.
-$autoSwitch = {
-    param($box)
-    $script:Settings.($box.Tag) = $(if ($box.IsChecked -eq $true) { 'on' } else { 'off' })
-    $chkAutoUpload.IsEnabled = ($chkAutoConvert.IsChecked -eq $true)
+# Send, Upload and Archive. A change applies to jobs queued from then on.
+function Save-QueueSwitches {
+    # Nothing to send, nothing to upload.
+    $chkAutoUpload.IsEnabled = ($script:Settings.AutoSend -ne 'none')
     Show-Queue
     # Saved by the Settings tab, which keeps a default folder as '' - if
     # that tab failed to load, the change holds for this session only.
     if (Get-Command Save-SettingsTab -ErrorAction SilentlyContinue) { Save-SettingsTab }
 }
-foreach ($box in @($chkAutoConvert, $chkAutoUpload, $chkAutoRaw, $chkAutoArchive)) { $box.Add_Click($autoSwitch) }
-$chkAutoConvert.IsChecked = ($script:Settings.AutoConvert -eq 'on')
+# Each box's Tag is its setting's name.
+$autoSwitch = {
+    param($box)
+    $script:Settings.($box.Tag) = $(if ($box.IsChecked -eq $true) { 'on' } else { 'off' })
+    Save-QueueSwitches
+}
+foreach ($box in @($chkAutoUpload, $chkAutoArchive)) { $box.Add_Click($autoSwitch) }
+foreach ($it in $cboAutoSend.Items) { if ([string]$it.Tag -eq $script:Settings.AutoSend) { $cboAutoSend.SelectedItem = $it } }
 $chkAutoUpload.IsChecked  = ($script:Settings.AutoUpload -eq 'on')
-$chkAutoUpload.IsEnabled  = ($script:Settings.AutoConvert -eq 'on')
-$chkAutoRaw.IsChecked     = ($script:Settings.AutoRaw -eq 'on')
+$chkAutoUpload.IsEnabled  = ($script:Settings.AutoSend -ne 'none')
 $chkAutoArchive.IsChecked = ($script:Settings.AutoArchive -eq 'on')
+# Wired after the first selection, so loading the setting does not save it.
+$cboAutoSend.Add_SelectionChanged({
+    if (-not $cboAutoSend.SelectedItem) { return }
+    $script:Settings.AutoSend = [string]$cboAutoSend.SelectedItem.Tag
+    Save-QueueSwitches
+})
 
 # ============================================================ state ==========
 $script:QueuePath    = Join-Path $script:Folders.Logs 'queue.json'
@@ -252,7 +267,7 @@ function Show-Queue {
     $parts = @(foreach ($s in 'running', 'queued', 'waiting', 'failed') { if ($count[$s]) { "$($count[$s]) $s" } })
     $lblQueue.Text = if ($script:Jobs.Count) { (@("$([int]$count['done']) of $($script:Jobs.Count) hosts done") + $parts) -join ' - ' }
                      elseif (@(Get-QueueSteps $script:Settings).Count) { 'Empty. Every host the Collect tab brings in is queued here and processed by itself.' }
-                     else { 'Empty, and nothing is ticked to run by itself (Runs by itself, above).' }
+                     else { 'Empty, and nothing runs by itself: Send is Nothing and Archive is off (Runs by itself, above).' }
 }
 
 function Add-QueueFolder([string]$Folder) {
@@ -274,8 +289,8 @@ function Get-QueueBlockers {
     # tabs each time, so a job goes on by itself once it is done.
     $b = @{}
     # The raw step runs Hayabusa too (its search command reads rules\config).
-    if (-not (Find-Hayabusa)) { $b.scan = $b.raw = 'Hayabusa is missing from code\hayabusa-x64' }
-    if ($script:RulesUpdating) { $b.scan = $b.ecs = $b.raw = 'the Hayabusa rules are being updated (Settings tab)' }
+    if (-not (Find-Hayabusa)) { $b.scan = $b.raw = $b.rawfile = 'Hayabusa is missing from code\hayabusa-x64' }
+    if ($script:RulesUpdating) { $b.scan = $b.ecs = $b.raw = $b.rawfile = 'the Hayabusa rules are being updated (Settings tab)' }
     $send = $null
     if (-not (Get-MissionIndexName $script:Settings.MissionName)) { $send = 'name the mission on the Settings tab' }
     elseif (-not $script:ConnOk -or $script:ConnKey -ne (Get-UploadConnKey)) { $send = 'press VERIFY CONNECTIVITY on the Upload tab' }
@@ -296,7 +311,7 @@ function Test-QueueReadsRules {
     # wait on RulesUpdating.
     $r = $script:QueueRun
     if (-not $r -or $r.Handle.IsCompleted) { return $false }
-    return ([string]@($r.Job.Steps)[$r.Job.Step]) -in 'scan', 'ecs', 'raw'
+    return ([string]@($r.Job.Steps)[$r.Job.Step]) -in 'scan', 'ecs', 'raw', 'rawfile'
 }
 
 function Save-QueueLines($Run) {
@@ -477,7 +492,7 @@ $btnQLog.Add_Click({
 })
 $btnQAdd.Add_Click({
     if (-not @(Get-QueueSteps $script:Settings).Count) {
-        [void][System.Windows.MessageBox]::Show('Nothing is ticked to run by itself. Tick at least one step under the QUEUE heading first.', 'Job queue'); return
+        [void][System.Windows.MessageBox]::Show('Nothing runs by itself: Send is Nothing and Archive when done is off. Pick what to Send under the QUEUE heading first.', 'Job queue'); return
     }
     $free = @(Get-ArchiveCandidates $script:Folders.Evtx | Where-Object { -not (Test-QueueHoldsFolder $script:Jobs $_.Path) })
     # A list the window can add to: "From another folder..." brings machine

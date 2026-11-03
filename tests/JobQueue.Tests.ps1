@@ -11,13 +11,13 @@ $scratch = Join-Path ([IO.Path]::GetTempPath()) "jobqueue_$PID"
 New-Item -ItemType Directory -Path $scratch -Force | Out-Null
 
 # ---- which steps a job gets comes from the queue pane's switches ----
-$on = [pscustomobject]@{ AutoConvert = 'on'; AutoUpload = 'on'; AutoRaw = 'on'; AutoArchive = 'on' }
+$on = [pscustomobject]@{ AutoSend = 'both'; AutoUpload = 'on'; AutoArchive = 'on' }
 Assert-Equal ((Get-QueueSteps $on) -join ',') 'scan,ecs,upload,raw,archive' "everything on: every step, raw import before the archive"
 $def = Read-ToolSettings (Join-Path $scratch 'none.conf')
 Assert-Equal ((Get-QueueSteps $def) -join ',') 'scan,ecs,upload' "by default: convert and upload; archive and raw import are the operator's choice"
-$noConv = [pscustomobject]@{ AutoConvert = 'off'; AutoUpload = 'on'; AutoRaw = 'off'; AutoArchive = 'on' }
-Assert-Equal ((Get-QueueSteps $noConv) -join ',') 'archive' "no upload without the conversion that makes its file"
-$off = [pscustomobject]@{ AutoConvert = 'off'; AutoUpload = 'off'; AutoRaw = 'off'; AutoArchive = 'off' }
+$noConv = [pscustomobject]@{ AutoSend = 'none'; AutoUpload = 'on'; AutoArchive = 'on' }
+Assert-Equal ((Get-QueueSteps $noConv) -join ',') 'archive' "no upload when nothing is made"
+$off = [pscustomobject]@{ AutoSend = 'none'; AutoUpload = 'off'; AutoArchive = 'off' }
 Assert-Equal @(Get-QueueSteps $off).Count 0 "everything off: no job at all"
 
 # ---- a job ----

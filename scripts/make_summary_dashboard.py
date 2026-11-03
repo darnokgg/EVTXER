@@ -2,7 +2,7 @@
 """Sixth dashboard: Hayabusa's own Results Summary, in Kibana.
 
 Hayabusa ends every scan with a Results Summary (the console screen, and the
-HTML report the Convert tab writes beside the results). Its authors chose what
+HTML report the Hayabusa tab writes beside the results). Its authors chose what
 is worth seeing first, so this dashboard rebuilds it from the uploaded
 detections (operator request, 2026-10-15):
 
@@ -15,7 +15,7 @@ detections (operator request, 2026-10-15):
 
 Not here, because Elasticsearch never receives them: "Total events analyzed"
 and "Data reduction" (only events that matched a rule are uploaded - the
-Convert tab's COVERAGE line has them), and the per-computer ATT&CK tactics,
+Hayabusa tab's COVERAGE line has them), and the per-computer ATT&CK tactics,
 which are on the MITRE ATT&CK dashboard.
 
 "Busiest day" groups by the op.DetectionDay runtime field (the UTC date of
@@ -163,7 +163,7 @@ def build_dashboard(panels):
                     "busiest day per level, the computers with the most distinct detections, every "
                     "alert, the timeline, and a logon summary. Events that matched no rule are not "
                     "uploaded, so Hayabusa's 'Total events analyzed' and 'Data reduction' are in the "
-                    "Convert tab's COVERAGE line instead. The query bar hides this tool's own "
+                    "Hayabusa tab's COVERAGE line instead. The query bar hides this tool's own "
                     "collection activity (tags: evtxer-collection); clear it to see that too.",
         kibanaSavedObjectMeta={"searchSourceJSON": json.dumps(
             {"query": {"query": "not tags: evtxer-collection", "language": "kuery"}, "filter": []})},

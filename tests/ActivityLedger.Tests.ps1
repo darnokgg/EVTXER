@@ -84,7 +84,7 @@ Assert-Equal $plain.Bytes ([long]-1) "an unmeasured host says so rather than cla
 # ---- every action that touches a target writes a row ----
 $src = Get-ToolSource
 foreach ($a in "'Port test'", "'Verify access'", "'Collect'", "'Convert'", "'Upload'") {
-    Assert-True ($src -match "Write-Ledger[^\r\n]*-Action $a|-Action $a") "$a is recorded in the activity log"
+    Assert-True ($src -match "Write-Ledger[^\r\n]*-Action $a|-Action $a|Action = $a") "$a is recorded in the activity log"
 }
 
 # ---- it survives a restart, and it can be handed over ----

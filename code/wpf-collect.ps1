@@ -737,12 +737,12 @@ function Invoke-Collection([string[]]$Targets) {
             Write-Log "Retry available for: $($script:RetryTargets -join ', ')`n" 'warn'
         }
 
-        # Hand the evidence to the Convert tab rather than making the operator
+        # Hand the evidence to the Hayabusa tab rather than making the operator
         # find it again. One host means its own folder; several means the evtx
         # root, which is the only single path covering the whole run - Hayabusa
         # scans recursively either way. Nothing is set when nothing was
         # collected, so a failed run cannot point the next step at an empty
-        # folder. Set-EvtxFolder lives in the Convert fragment; the guard keeps
+        # folder. Set-EvtxFolder lives in the Hayabusa tab's fragment; the guard keeps
         # this tab working if that one was not loaded.
         $outFolders = @($summary.OutFolders)
         if ($summary.Files.Count -gt 0 -and (Get-Command Set-EvtxFolder -ErrorAction SilentlyContinue)) {
@@ -776,7 +776,7 @@ function Invoke-Collection([string[]]$Targets) {
         $cred = $null; $pass = $null
         Stop-UiJob
         Update-RetryButton
-        # Last - see the Convert tab's finally.
+        # Last - see the Hayabusa tab's finally.
         Set-AppBusy $false
     }
 }

@@ -222,7 +222,7 @@ try {
     Assert-Equal (Get-RawExportProblem ([pscustomobject]@{ Ok = $true; Cancelled = $false; Converted = 9L; Bad = 2L })) '2 record(s) of the export could not be read' "some unreadable is said"
     Assert-Equal (Get-RawExportProblem ([pscustomobject]@{ Ok = $true; Cancelled = $false; Converted = 9L; Bad = 0L })) '' "a clean export has nothing to say"
     $lib = Get-Content "$PSScriptRoot\..\code\HayabusaLib.ps1" -Raw
-    Assert-True ([regex]::Match($lib, "(?s)'raw' \{.*?Publish-EcsFile").Value -match 'if \(\$x\.Bad -and -not \$x\.Converted\) \{ throw') "the queue's raw step fails when no record could be read"
+    Assert-True ([regex]::Match($lib, "(?s)'raw', 'rawfile' \} \{.*?Publish-EcsFile").Value -match 'if \(\$x\.Bad -and -not \$x\.Converted\) \{ throw') "the queue's raw step fails when no record could be read"
     # Detections never into the raw events' pattern.
     Assert-True ((New-IndexName 'raw' @()) -notlike 'hayabusa-raw-*' -and (New-IndexName 'Raw WS01' @()) -notlike 'hayabusa-raw-*') "a generated detections index name is never in hayabusa-raw-*"
     $why = ''
@@ -235,9 +235,9 @@ try {
     $up = Get-Content "$PSScriptRoot\..\code\wpf-upload.ps1" -Raw
     Assert-True ($up -match "\`$_\.Id -eq 'hayabusa-evtx-dataview'" -and $up -match "-not \(Test-IndexCoveredByPattern 'hayabusa-raw-x'") "the Kibana link prefers the detections' own data view, never 'Mission - everything'"
     Assert-True ($up -match '\(Get-JsonlImportId \$beside\) -eq \$fileImportId') "the raw events beside a detections file are offered only from the same conversion"
-    Assert-True ($up -match 'Get-StaleDetectionsViewWarning' -and $lib -match "(?s)'raw' \{.*?Get-StaleDetectionsViewWarning") "both raw routes warn about pre-v81 dashboards"
+    Assert-True ($up -match 'Get-StaleDetectionsViewWarning' -and $lib -match "(?s)'raw', 'rawfile' \} \{.*?Get-StaleDetectionsViewWarning") "both raw routes warn about pre-v81 dashboards"
     $cv = Get-Content "$PSScriptRoot\..\code\wpf-convert.ps1" -Raw
-    Assert-True ($cv -match 'ScanNoDetections -and \$chkRaw\.IsChecked') "a scan with no detections still exports the raw events"
+    Assert-True ($cv -match 'ScanNoDetections -and \$plan\.Raw') "a scan with no detections still exports the raw events"
 
     # ---- end to end with the real Hayabusa, on a sample folder ----
     # evtx-samples is not shipped (gitignored), so this runs in the repo only.

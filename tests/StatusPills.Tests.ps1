@@ -49,7 +49,7 @@ Assert-True ($blk -match '\$b\.upload = \$send' -and $blk -match '\$b\.raw = \$s
 
 # ---- 2. the queue is the main path ----
 $set = Get-Content (Join-Path $code 'wpf-settings.ps1') -Raw
-foreach ($c in 'chkAutoConvert', 'chkAutoUpload', 'chkAutoRaw', 'chkAutoArchive') {
+foreach ($c in 'cboAutoSend', 'chkAutoUpload', 'chkAutoArchive') {
     Assert-True ($q -match "x:Name=`"$c`"") "$c is on the queue pane"
     Assert-True ($set -notmatch $c) "and no longer on the Settings tab"
 }
@@ -92,6 +92,6 @@ Assert-True ($shell -match '(?s)<Style x:Key="PillText".*?TextWrapping" Value="N
 # agree with the queue.
 Assert-True ($fn -match '(?s)try \{ \$elkOk') "each tab's fact is read on its own"
 # The switches live on the queue but save through the Settings tab.
-$sw = [regex]::Match($q, '(?s)\$autoSwitch = \{.*?\r?\n\}').Value
+$sw = [regex]::Match($q, '(?s)function Save-QueueSwitches \{.*?\r?\n\}').Value
 Assert-True ($sw.IndexOf('Show-Queue') -ge 0 -and $sw.IndexOf('Show-Queue') -lt $sw.IndexOf('Save-SettingsTab')) "a switch updates the queue before saving"
 Assert-True ($sw -match 'Get-Command Save-SettingsTab') "and still works when the Settings tab failed to load"

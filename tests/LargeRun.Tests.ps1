@@ -76,4 +76,4 @@ else {
 $wq = Get-Content (Join-Path $code 'wpf-queue.ps1') -Raw
 $done = [regex]::Match($wq, '(?s)function Complete-QueueStep.*?\n\}').Value
 Assert-True ($done -match "\`$res\.Warning" -and $done -match "Write-Log -Background [^\n]*Warning[^\n]*'warn'" -and $done -match '\$job\.Note = \$res\.Warning') "a queued step's warning gets its own amber line and stays on the row"
-Assert-True ([regex]::Match($lib, "(?s)'raw' \{.*?\n            \}").Value -match '\$r\.Warning = ') "the raw step hands its warning back"
+Assert-True ([regex]::Match($lib, "(?s)'raw', 'rawfile' \} \{.*?\n            \}").Value -match '\$r\.Warning = ') "the raw step hands its warning back"

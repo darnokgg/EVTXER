@@ -30,7 +30,7 @@ foreach ($what in 'verifying access', 'testing ports', 'collecting EVTX', 'uploa
                   'archiving EVTX', 'updating the Hayabusa rules', 'restoring the Hayabusa rules') {
     Assert-True ($all -match "Set-AppBusy \`$true '$what'") "'$what' shows the busy indicator"
 }
-Assert-True ($all -match "Set-AppBusy \`$true \`$\(if \(\`$fromEvtx\)") "the scan/convert shows it too"
+Assert-True ($all -match "Set-AppBusy \`$true \`$convWhat") "the scan/convert (and the raw-only export) shows it too"
 
 # Guards: a handler that had none.
 $up = Get-Content (Join-Path $root 'code\wpf-upload.ps1') -Raw
