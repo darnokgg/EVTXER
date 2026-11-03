@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src=".github/images/evtxer-window.png" width="860" alt="The EVTXER window: eight tabs, the status pills, the collection options and the job queue">
+  <img src=".github/images/evtxer-window.png" width="860" alt="The EVTXER window: seven tabs, the status pills, the collection options and the job queue with its Send choice">
 </p>
 
 EVTXER is a Windows tool for incident responders and threat hunters. It pulls
@@ -47,7 +47,9 @@ needed.** Copy the folder, double-click, work.
   endpoint and Active Directory investigation (PowerShell, command lines,
   registry, Kerberos, services, tasks...), named like the detections' fields
   so one query finds both. Exported by Hayabusa's `search` command, converted
-  by a compiled converter, uploaded with the same checks.
+  by a compiled converter, uploaded with the same checks. One choice says what
+  to send: detections, raw events, or both - raw events only skips the rules
+  scan.
 - **Hunt** - thirteen Kibana dashboards and ten saved searches: overview, hunting,
   MITRE ATT&CK, PEAK threat hunting on detections and on raw events (with
   Kerberos panels), raw-event lateral movement, Active Directory and
@@ -55,8 +57,9 @@ needed.** Copy the folder, double-click, work.
   long command lines), a mission timeline joining detections and raw events,
   and per-host links. Exports for Kibana 9 and 8.7.
 - **Takajo** - CSV results or an offline HTML report, opened from disk.
-- **Queue** - each collected host runs scan, upload, raw events and archive by
-  itself, in the background, one step at a time.
+- **Queue** - each collected host is scanned, uploaded and archived by itself,
+  in the background, one step at a time; its Send choice picks detections, raw
+  events or both, and works the same on folders from a share.
 - **Accountability** - an append-only activity log of every action that
   touched a target or the stack, and an optional PCAP of the session.
   Passwords are never written to disk, logs or command lines (an opt-in
