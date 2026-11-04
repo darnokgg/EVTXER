@@ -30,6 +30,22 @@ dashboards to hunt in.
 It is plain PowerShell 5.1 and WPF: **no Python, no installer, no internet
 needed.** Copy the folder, double-click, work.
 
+## See it work
+
+The queue: three host folders, each scanned with Hayabusa, converted and
+uploaded - detections and every raw event - by itself.
+
+https://github.com/user-attachments/assets/562b95b9-7e06-4537-8827-7bae5ab2a65f
+
+The [walkthrough](WALKTHROUGH.md) has a short clip and step-by-step setup for
+each stage:
+[collect](WALKTHROUGH.md#1-collect-the-logs-from-a-host) over WinRM-HTTPS |
+[scan](WALKTHROUGH.md#2-scan-them-with-hayabusa) |
+[upload](WALKTHROUGH.md#3-upload-to-elastic) |
+[the queue](WALKTHROUGH.md#4-or-let-the-queue-do-all-of-it) |
+[dashboards](WALKTHROUGH.md#5-put-the-dashboards-into-kibana) |
+[hunting in Kibana](WALKTHROUGH.md#6-hunt-in-kibana).
+
 ## Features
 
 - **Collect** - SMB, WinRM, or WinRM over HTTPS. A DFIR preset of 16 logs or
